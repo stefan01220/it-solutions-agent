@@ -207,7 +207,7 @@ Write-Host ""
 if ($sent) {
   Write-Host "=== Fertig: Bericht ist im CRM angekommen ===" -ForegroundColor Green
   Write-Host "Rechner '$($env:COMPUTERNAME)' ist jetzt im CRM unter Kunde '$($resp.customerName)' sichtbar (Server-Status)." -ForegroundColor Green
-  Write-Host "Der Collector meldet sich alle 2 Stunden. Token-Verwaltung: $CrmBase/settings/agents"
+  Write-Host "Der Collector meldet sich alle 2 Stunden."
   exit 0
 }
 Write-Host "=== Installiert, aber der erste Bericht ist NICHT angekommen ===" -ForegroundColor Red
