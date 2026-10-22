@@ -198,6 +198,11 @@ try {
   Write-Host "      $($_.Exception.Message)" -ForegroundColor Yellow
 }
 
+$trayExe = Join-Path $env:ProgramFiles "IT-Solutions\IT-Solutions-Agent.exe"
+if ($sent -and [Environment]::UserInteractive -and (Test-Path $trayExe) -and -not (Get-Process -Name "IT-Solutions-Agent" -ErrorAction SilentlyContinue)) {
+  try { Start-Process -FilePath $trayExe; Write-Host "      Symbol im Infobereich gestartet." -ForegroundColor Green } catch {}
+}
+
 Write-Host ""
 if ($sent) {
   Write-Host "=== Fertig: Bericht ist im CRM angekommen ===" -ForegroundColor Green

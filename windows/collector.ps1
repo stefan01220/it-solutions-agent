@@ -1,5 +1,5 @@
 # IT-Solutions Asset-Collector
-# collector-version: 10
+# collector-version: 11
 # Infrastruktur-Scan (nur lesend) -> POST an das CRM. Zusaetzlich fuehrt er die FESTEN Befehle
 # windows-update, winget-upgrade, rescan und reboot aus, wenn das CRM sie fuer dieses Geraet
 # freigegeben hat (Opt-in) und der Nutzer sie ausgeloest hat. Kein freies Skript, kein Fernzugriff.
@@ -21,7 +21,7 @@ $ErrorActionPreference = "Stop"
 # TLS 1.2 erzwingen (Windows PowerShell 5.1 nutzt sonst veraltetes TLS).
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$CollectorVersion = 10
+$CollectorVersion = 11
 $SigningKeyXml = '<RSAKeyValue><Modulus>uAxspiYovBEcA7viyD9y1pDu+gw4n/ASAGAgLZHCURTOYeD6Az/Udz8JavYAf7SQmISWfe28nVhzskliDyYyy23RiS9NpEnS0tqMXBNr+tKz29N4wOhTdyhqsIyAulxN9rK+VA+WyF9lNBmTI94OvUJ3qeebgrJpHThdVILVVhqQVwUjTJvq2ZQDoCZcofdGYVWowBRyCewoW9KMnDsoEGXy/1/nuxKRB4GicQMo4P5+HMWbNQFf+c5n+qGKE3N4TdPUHQOE38i25y5zgJ8e88Olqhla2cKfhU5wwJhZ5JgvR/R6BSt0QAxdXmkOLtfjH8SWIyHLdaUXRQyWPo4cb2bDaUsEbL3R7IapkqejvGwQJMsamoGU9xVUP0+Cj/UlpVYWQ1wSmFnIZS02LG7bpAIfkeUEhc/3/iu2nJ/PV2dROIHZ1rlxNBwcmWb0QnaYEYHd1IGHdVCMBpx2ggmgChphkbhhaGd3r84ZRt3SmIefwmx025R/CgSX/6Fvsqih</Modulus><Exponent>AQAB</Exponent></RSAKeyValue>'
 
 $cfgPath = Join-Path $PSScriptRoot "agent-config.json"
@@ -306,6 +306,98 @@ function Set-MainTaskInterval($taskName = "IT-Solutions Asset-Collector", $inter
     if ($tr.Repetition -and $tr.Repetition.Interval -and $tr.Repetition.Interval -ne $interval) { $tr.Repetition.Interval = $interval; $changed = $true }
   }
   if ($changed) { $task | Set-ScheduledTask | Out-Null }
+}
+
+# Angemeldete Benutzer duerfen den Collector-Task STARTEN (Tray: "Jetzt melden"), aber nicht aendern.
+# DACL des Tasks um "Authenticated Users: Lesen + Ausfuehren" ergaenzen (idempotent).
+function Set-TaskUserRunnable($taskName = "IT-Solutions Asset-Collector") {
+  $svc = New-Object -ComObject Schedule.Service
+  $svc.Connect()
+  $t = $svc.GetFolder("\").GetTask($taskName)
+  $sd = [string]$t.GetSecurityDescriptor(4)
+  # Windows speichert das Recht als Hexmaske (0x1200a9) - daher jede Erlauben-Regel fuer AU als "schon vorhanden" werten.
+  if ($sd -and $sd -notmatch '\(A;[^;)]*;[^;)]*;;;AU\)') { $t.SetSecurityDescriptor($sd + "(A;;GRGX;;;AU)", 0) }
+}
+
+# Tray-Programm (Symbol im Infobereich) installieren bzw. aktualisieren - nur mit gueltiger Signatur.
+# Abschaltbar je Geraet mit "tray": false in agent-config.json. Server Core (kein explorer.exe) wird uebersprungen.
+function Install-Tray {
+  $runKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
+  $runName = "IT-Solutions Agent"
+  if ($cfg.PSObject.Properties["tray"] -and $cfg.tray -eq $false) {
+    Remove-ItemProperty -Path $runKey -Name $runName -ErrorAction SilentlyContinue
+    return "abgeschaltet"
+  }
+  if (-not (Test-Path (Join-Path $env:windir "explorer.exe"))) { return "kein Desktop" }
+  $base = $cfg.reportUrl -replace '/api/agent/report$', ''
+  $dir = Join-Path $env:ProgramFiles "IT-Solutions"
+  $exe = Join-Path $dir "IT-Solutions-Agent.exe"
+  $sigLocal = "$exe.sig"
+  $wc = New-Object System.Net.WebClient
+  $sigText = ([System.Text.Encoding]::ASCII.GetString($wc.DownloadData("$base/agent/IT-Solutions-Agent.exe.sig"))).Trim()
+  $have = ""
+  if (Test-Path $sigLocal) { $have = ([string](Get-Content $sigLocal -Raw)).Trim() }
+  $result = "aktuell"
+  if ($sigText -ne $have -or -not (Test-Path $exe)) {
+    $bytes = $wc.DownloadData("$base/agent/IT-Solutions-Agent.exe")
+    $rsa = New-Object System.Security.Cryptography.RSACryptoServiceProvider
+    $rsa.FromXmlString($SigningKeyXml)
+    if (-not $rsa.VerifyData($bytes, "SHA256", [Convert]::FromBase64String($sigText))) { return "Signatur ungueltig - nicht installiert" }
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    # Laufende Instanzen sperren die Datei: umbenennen geht trotzdem, die neue Version gilt ab der naechsten Anmeldung.
+    if (Test-Path $exe) {
+      Remove-Item "$exe.old" -Force -ErrorAction SilentlyContinue
+      try { Move-Item -Path $exe -Destination "$exe.old" -Force } catch {}
+    }
+    [System.IO.File]::WriteAllBytes($exe, $bytes)
+    Set-Content -Path $sigLocal -Value $sigText -Encoding ASCII
+    $result = "installiert"
+  }
+  $want = '"' + $exe + '"'
+  $cur = (Get-ItemProperty -Path $runKey -Name $runName -ErrorAction SilentlyContinue).$runName
+  if ($cur -ne $want) { New-ItemProperty -Path $runKey -Name $runName -Value $want -PropertyType String -Force | Out-Null }
+  return $result
+}
+
+# Statusdatei fuer das Tray-Programm: liegt AUSSERHALB des geschuetzten Installationsordners, enthaelt kein Token.
+# Lesen: alle Benutzer; Schreiben: nur SYSTEM und Administratoren.
+$StatusDir = Join-Path $env:ProgramData "IT-Solutions-Status"
+function Write-AgentStatus($result, $message, $resp) {
+  if (-not (Test-Path $StatusDir)) {
+    New-Item -ItemType Directory -Force -Path $StatusDir | Out-Null
+    $acl = New-Object System.Security.AccessControl.DirectorySecurity
+    $acl.SetAccessRuleProtection($true, $false)
+    $inh = "ContainerInherit,ObjectInherit"
+    foreach ($r in @(@("*S-1-5-18", "FullControl"), @("*S-1-5-32-544", "FullControl"), @("*S-1-5-32-545", "ReadAndExecute"))) {
+      $sid = New-Object System.Security.Principal.SecurityIdentifier($r[0].TrimStart("*"))
+      $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($sid, $r[1], $inh, "None", "Allow")))
+    }
+    Set-Acl -Path $StatusDir -AclObject $acl
+  }
+  $file = Join-Path $StatusDir "status.json"
+  $old = $null
+  try { $old = Get-Content $file -Raw -ErrorAction Stop | ConvertFrom-Json } catch {}
+  $ip = $null
+  try {
+    $ip = @(Get-NetIPConfiguration -ErrorAction Stop | Where-Object { $_.IPv4DefaultGateway } |
+      ForEach-Object { $_.IPv4Address.IPAddress } | Where-Object { $_ })[0]
+  } catch {}
+  $now = (Get-Date).ToUniversalTime().ToString("o")
+  $st = [ordered]@{
+    agentVersion  = $CollectorVersion
+    hostname      = $env:COMPUTERNAME
+    ip            = $ip
+    crmHost       = ([uri]$cfg.reportUrl).Host
+    lastRunAt     = $now
+    lastResult    = $result
+    lastMessage   = $message
+    lastSuccessAt = $(if ($result -eq "ok") { $now } elseif ($old) { $old.lastSuccessAt } else { $null })
+    customerName  = $(if ($resp -and $resp.customerName) { [string]$resp.customerName } elseif ($old) { $old.customerName } else { $null })
+    provider      = $(if ($resp -and $resp.provider) { $resp.provider } elseif ($old) { $old.provider } else { $null })
+  }
+  $tmp = "$file.tmp"
+  [System.IO.File]::WriteAllText($tmp, ($st | ConvertTo-Json -Depth 4), (New-Object System.Text.UTF8Encoding($false)))
+  Move-Item -Force -Path $tmp -Destination $file
 }
 
 # --- Poll-Modus (-Poll): Befehle abholen, ausfuehren, Ergebnis melden ---------------
@@ -645,7 +737,8 @@ $network = Timed "network" {
 } @()
 
 # Abhol-Task fuer Fernbefehle sicherstellen (best-effort).
-if (-not $DryRun) { Safe { Register-PollTask }; Safe { Set-MainTaskInterval } }
+$trayState = $null
+if (-not $DryRun) { Safe { Register-PollTask }; Safe { Set-MainTaskInterval }; Safe { Set-TaskUserRunnable }; $trayState = Safe { Install-Tray } "Fehler" }
 
 $payload = [pscustomobject]@{
   collectorVersion = $CollectorVersion
@@ -677,6 +770,7 @@ $payload = [pscustomobject]@{
   hyperv           = $hyperv
   backup           = $backup
   network          = @($network | Where-Object { $_ -ne $null })
+  tray             = $trayState
 } | ConvertTo-Json -Depth 7 -Compress
 
 if ($DryRun) {
@@ -685,9 +779,16 @@ if ($DryRun) {
   exit 0
 }
 
-Invoke-RestMethod -Method Post -Uri $cfg.reportUrl `
-  -Headers @{ Authorization = "Bearer $($cfg.token)" } `
-  -ContentType "application/json; charset=utf-8" `
-  -Body ([System.Text.Encoding]::UTF8.GetBytes($payload)) -TimeoutSec 30 | Out-Null
+try {
+  $resp = Invoke-RestMethod -Method Post -Uri $cfg.reportUrl `
+    -Headers @{ Authorization = "Bearer $($cfg.token)" } `
+    -ContentType "application/json; charset=utf-8" `
+    -Body ([System.Text.Encoding]::UTF8.GetBytes($payload)) -TimeoutSec 30
+} catch {
+  $err = $_.Exception.Message
+  Safe { Write-AgentStatus "error" ("Bericht nicht gesendet: " + $err) $null }
+  throw
+}
+Safe { Write-AgentStatus "ok" "Bericht gesendet" $resp }
 
 Write-Output "Report gesendet: $($env:COMPUTERNAME) -> $($cfg.reportUrl)"
