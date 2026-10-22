@@ -1,5 +1,5 @@
 # IT-Solutions Asset-Collector
-# collector-version: 11
+# collector-version: 12
 # Infrastruktur-Scan (nur lesend) -> POST an das CRM. Zusaetzlich fuehrt er die FESTEN Befehle
 # windows-update, winget-upgrade, rescan und reboot aus, wenn das CRM sie fuer dieses Geraet
 # freigegeben hat (Opt-in) und der Nutzer sie ausgeloest hat. Kein freies Skript, kein Fernzugriff.
@@ -21,7 +21,7 @@ $ErrorActionPreference = "Stop"
 # TLS 1.2 erzwingen (Windows PowerShell 5.1 nutzt sonst veraltetes TLS).
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$CollectorVersion = 11
+$CollectorVersion = 12
 $SigningKeyXml = '<RSAKeyValue><Modulus>uAxspiYovBEcA7viyD9y1pDu+gw4n/ASAGAgLZHCURTOYeD6Az/Udz8JavYAf7SQmISWfe28nVhzskliDyYyy23RiS9NpEnS0tqMXBNr+tKz29N4wOhTdyhqsIyAulxN9rK+VA+WyF9lNBmTI94OvUJ3qeebgrJpHThdVILVVhqQVwUjTJvq2ZQDoCZcofdGYVWowBRyCewoW9KMnDsoEGXy/1/nuxKRB4GicQMo4P5+HMWbNQFf+c5n+qGKE3N4TdPUHQOE38i25y5zgJ8e88Olqhla2cKfhU5wwJhZ5JgvR/R6BSt0QAxdXmkOLtfjH8SWIyHLdaUXRQyWPo4cb2bDaUsEbL3R7IapkqejvGwQJMsamoGU9xVUP0+Cj/UlpVYWQ1wSmFnIZS02LG7bpAIfkeUEhc/3/iu2nJ/PV2dROIHZ1rlxNBwcmWb0QnaYEYHd1IGHdVCMBpx2ggmgChphkbhhaGd3r84ZRt3SmIefwmx025R/CgSX/6Fvsqih</Modulus><Exponent>AQAB</Exponent></RSAKeyValue>'
 
 $cfgPath = Join-Path $PSScriptRoot "agent-config.json"
@@ -352,6 +352,10 @@ function Install-Tray {
     [System.IO.File]::WriteAllBytes($exe, $bytes)
     Set-Content -Path $sigLocal -Value $sigText -Encoding ASCII
     $result = "installiert"
+    # Als SYSTEM: Symbol gleich in allen angemeldeten Sitzungen starten (sonst erst bei der naechsten Anmeldung).
+    if ([System.Security.Principal.WindowsIdentity]::GetCurrent().IsSystem) {
+      try { $p = Start-Process -FilePath $exe -ArgumentList "--start-sessions" -PassThru -Wait -WindowStyle Hidden; $result = "installiert, in $($p.ExitCode) Sitzung(en) gestartet" } catch {}
+    }
   }
   $want = '"' + $exe + '"'
   $cur = (Get-ItemProperty -Path $runKey -Name $runName -ErrorAction SilentlyContinue).$runName

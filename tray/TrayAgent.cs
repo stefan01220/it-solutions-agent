@@ -6,6 +6,8 @@
 //
 // Bauen: tray\build.cmd (csc.exe aus .NET Framework 4.x, kein SDK noetig).
 // Testen ohne Installation: IT-Solutions-Agent.exe --details  (oeffnet sofort das Detailfenster)
+// --start-sessions (nur als SYSTEM, ruft der Collector nach einer Installation/Aktualisierung auf):
+//   startet das Symbol sofort in allen angemeldeten Benutzersitzungen, statt erst bei der naechsten Anmeldung.
 using System;
 using System.Diagnostics;
 using System.Drawing;
@@ -26,8 +28,8 @@ using Microsoft.Win32;
 [assembly: AssemblyProduct("IT-Solutions Agent")]
 [assembly: AssemblyCompany("IT-Solutions by Stefan Regenfelder")]
 [assembly: AssemblyCopyright("(c) 2026 Stefan Regenfelder, Villach - MIT-Lizenz")]
-[assembly: AssemblyVersion("1.0.0.0")]
-[assembly: AssemblyFileVersion("1.0.0.0")]
+[assembly: AssemblyVersion("1.1.0.0")]
+[assembly: AssemblyFileVersion("1.1.0.0")]
 
 namespace ItSolutions.Agent
 {
@@ -524,6 +526,72 @@ namespace ItSolutions.Agent
         }
     }
 
+    // Symbol in allen aktiven Benutzersitzungen starten (aus dem SYSTEM-Kontext des Collectors).
+    // WTSQueryUserToken braucht das TCB-Recht - das hat nur SYSTEM. Doppelte Instanzen verhindert der Mutex je Sitzung.
+    static class SessionLauncher
+    {
+        [StructLayout(LayoutKind.Sequential)]
+        struct WTS_SESSION_INFO { public int SessionId; public IntPtr pWinStationName; public int State; }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        struct STARTUPINFO
+        {
+            public int cb; public string lpReserved; public string lpDesktop; public string lpTitle;
+            public int dwX, dwY, dwXSize, dwYSize, dwXCountChars, dwYCountChars, dwFillAttribute, dwFlags;
+            public short wShowWindow, cbReserved2; public IntPtr lpReserved2, hStdInput, hStdOutput, hStdError;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct PROCESS_INFORMATION { public IntPtr hProcess, hThread; public int dwProcessId, dwThreadId; }
+
+        [DllImport("wtsapi32.dll", SetLastError = true)] static extern bool WTSEnumerateSessions(IntPtr server, int reserved, int version, out IntPtr info, out int count);
+        [DllImport("wtsapi32.dll")] static extern void WTSFreeMemory(IntPtr p);
+        [DllImport("wtsapi32.dll", SetLastError = true)] static extern bool WTSQueryUserToken(int sessionId, out IntPtr token);
+        [DllImport("advapi32.dll", SetLastError = true)] static extern bool DuplicateTokenEx(IntPtr existing, uint access, IntPtr attrs, int impersonation, int tokenType, out IntPtr newToken);
+        [DllImport("userenv.dll", SetLastError = true)] static extern bool CreateEnvironmentBlock(out IntPtr env, IntPtr token, bool inherit);
+        [DllImport("userenv.dll")] static extern bool DestroyEnvironmentBlock(IntPtr env);
+        [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        static extern bool CreateProcessAsUser(IntPtr token, string app, string cmd, IntPtr pa, IntPtr ta, bool inherit, uint flags, IntPtr env, string dir, ref STARTUPINFO si, out PROCESS_INFORMATION pi);
+        [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+
+        public static int StartInAllSessions()
+        {
+            string exe = Assembly.GetExecutingAssembly().Location;
+            IntPtr info; int count; int started = 0;
+            if (!WTSEnumerateSessions(IntPtr.Zero, 0, 1, out info, out count)) return -1;
+            try
+            {
+                int size = Marshal.SizeOf(typeof(WTS_SESSION_INFO));
+                for (int i = 0; i < count; i++)
+                {
+                    var si = (WTS_SESSION_INFO)Marshal.PtrToStructure(new IntPtr(info.ToInt64() + i * size), typeof(WTS_SESSION_INFO));
+                    if (si.State != 0 /* WTSActive */ || si.SessionId == 0) continue;
+                    IntPtr user, primary = IntPtr.Zero, env = IntPtr.Zero;
+                    if (!WTSQueryUserToken(si.SessionId, out user)) continue;
+                    try
+                    {
+                        if (!DuplicateTokenEx(user, 0x02000000 /* MAXIMUM_ALLOWED */, IntPtr.Zero, 2 /* Impersonation */, 1 /* Primary */, out primary)) continue;
+                        CreateEnvironmentBlock(out env, primary, false);
+                        var st = new STARTUPINFO(); st.cb = Marshal.SizeOf(typeof(STARTUPINFO)); st.lpDesktop = "winsta0\\default";
+                        PROCESS_INFORMATION pi;
+                        if (CreateProcessAsUser(primary, exe, "\"" + exe + "\"", IntPtr.Zero, IntPtr.Zero, false, 0x00000400 /* CREATE_UNICODE_ENVIRONMENT */, env, Path.GetDirectoryName(exe), ref st, out pi))
+                        {
+                            started++; CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+                        }
+                    }
+                    finally
+                    {
+                        if (env != IntPtr.Zero) DestroyEnvironmentBlock(env);
+                        if (primary != IntPtr.Zero) CloseHandle(primary);
+                        CloseHandle(user);
+                    }
+                }
+            }
+            finally { WTSFreeMemory(info); }
+            return started;
+        }
+    }
+
     static class Program
     {
         [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
@@ -561,6 +629,7 @@ namespace ItSolutions.Agent
         static void Main(string[] args)
         {
             // --render <datei.png>: Detailfenster + Symbole als Bild speichern (Doku/Test, ohne Bildschirm)
+            if (Array.IndexOf(args, "--start-sessions") >= 0) { Environment.ExitCode = Math.Max(0, SessionLauncher.StartInAllSessions()); return; }
             int ri = Array.IndexOf(args, "--render");
             if (ri >= 0 && ri + 1 < args.Length) { Render(args[ri + 1]); return; }
             bool showDetails = Array.Exists(args, a => a == "--details");
