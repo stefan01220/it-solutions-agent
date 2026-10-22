@@ -28,8 +28,8 @@ using Microsoft.Win32;
 [assembly: AssemblyProduct("IT-Solutions Agent")]
 [assembly: AssemblyCompany("IT-Solutions by Stefan Regenfelder")]
 [assembly: AssemblyCopyright("(c) 2026 Stefan Regenfelder, Villach - MIT-Lizenz")]
-[assembly: AssemblyVersion("1.2.0.0")]
-[assembly: AssemblyFileVersion("1.2.0.0")]
+[assembly: AssemblyVersion("1.3.0.0")]
+[assembly: AssemblyFileVersion("1.3.0.0")]
 
 namespace ItSolutions.Agent
 {
@@ -61,7 +61,7 @@ namespace ItSolutions.Agent
         {
             var s = new AgentStatus();
             s.Hostname = Environment.MachineName;
-            s.CrmHost = "crm.it-villach.at";
+            s.CrmHost = "managed.it-villach.at";
             try
             {
                 if (!File.Exists(FilePath)) return s;
@@ -350,7 +350,7 @@ namespace ItSolutions.Agent
             if (IsAdmin())
             {
                 menu.Items.Add(new ToolStripSeparator());
-                menu.Items.Add("Symbol ausblenden (bis zur nächsten Anmeldung)", null, (s, e) => ExitThread());
+                menu.Items.Add("Symbol vorübergehend ausblenden", null, (s, e) => ExitThread());
             }
             icon.ContextMenuStrip = menu;
 

@@ -1,5 +1,5 @@
 # IT-Solutions Asset-Collector
-# collector-version: 13
+# collector-version: 14
 # Infrastruktur-Scan (nur lesend) -> POST an das CRM. Zusaetzlich fuehrt er die FESTEN Befehle
 # windows-update, winget-upgrade, rescan und reboot aus, wenn das CRM sie fuer dieses Geraet
 # freigegeben hat (Opt-in) und der Nutzer sie ausgeloest hat. Kein freies Skript, kein Fernzugriff.
@@ -21,7 +21,7 @@ $ErrorActionPreference = "Stop"
 # TLS 1.2 erzwingen (Windows PowerShell 5.1 nutzt sonst veraltetes TLS).
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$CollectorVersion = 13
+$CollectorVersion = 14
 $SigningKeyXml = '<RSAKeyValue><Modulus>uAxspiYovBEcA7viyD9y1pDu+gw4n/ASAGAgLZHCURTOYeD6Az/Udz8JavYAf7SQmISWfe28nVhzskliDyYyy23RiS9NpEnS0tqMXBNr+tKz29N4wOhTdyhqsIyAulxN9rK+VA+WyF9lNBmTI94OvUJ3qeebgrJpHThdVILVVhqQVwUjTJvq2ZQDoCZcofdGYVWowBRyCewoW9KMnDsoEGXy/1/nuxKRB4GicQMo4P5+HMWbNQFf+c5n+qGKE3N4TdPUHQOE38i25y5zgJ8e88Olqhla2cKfhU5wwJhZ5JgvR/R6BSt0QAxdXmkOLtfjH8SWIyHLdaUXRQyWPo4cb2bDaUsEbL3R7IapkqejvGwQJMsamoGU9xVUP0+Cj/UlpVYWQ1wSmFnIZS02LG7bpAIfkeUEhc/3/iu2nJ/PV2dROIHZ1rlxNBwcmWb0QnaYEYHd1IGHdVCMBpx2ggmgChphkbhhaGd3r84ZRt3SmIefwmx025R/CgSX/6Fvsqih</Modulus><Exponent>AQAB</Exponent></RSAKeyValue>'
 
 $cfgPath = Join-Path $PSScriptRoot "agent-config.json"
@@ -372,6 +372,14 @@ function Install-Tray {
   $want = '"' + $exe + '"'
   $cur = (Get-ItemProperty -Path $runKey -Name $runName -ErrorAction SilentlyContinue).$runName
   if ($cur -ne $want) { New-ItemProperty -Path $runKey -Name $runName -Value $want -PropertyType String -Force | Out-Null }
+  # Offene Sitzungen ohne Symbol (z.B. Installation per Gruppenrichtlinie, Symbol beendet): nachstarten.
+  if ($result -eq "aktuell" -and [System.Security.Principal.WindowsIdentity]::GetCurrent().IsSystem) {
+    $desk = @(Get-Process -Name explorer -ErrorAction SilentlyContinue | Select-Object -ExpandProperty SessionId -Unique)
+    $tray = @(Get-Process -Name IT-Solutions-Agent -ErrorAction SilentlyContinue | Select-Object -ExpandProperty SessionId -Unique)
+    if (@($desk | Where-Object { $_ -ne 0 -and $tray -notcontains $_ }).Count -gt 0) {
+      try { $p = Start-Process -FilePath $exe -ArgumentList "--start-sessions" -PassThru -Wait -WindowStyle Hidden; $result = "aktuell, in $($p.ExitCode) Sitzung(en) nachgestartet" } catch {}
+    }
+  }
   return $result
 }
 
