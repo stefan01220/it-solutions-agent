@@ -28,8 +28,8 @@ using Microsoft.Win32;
 [assembly: AssemblyProduct("IT-Solutions Agent")]
 [assembly: AssemblyCompany("IT-Solutions by Stefan Regenfelder")]
 [assembly: AssemblyCopyright("(c) 2026 Stefan Regenfelder, Villach - MIT-Lizenz")]
-[assembly: AssemblyVersion("1.4.0.0")]
-[assembly: AssemblyFileVersion("1.4.0.0")]
+[assembly: AssemblyVersion("1.5.0.0")]
+[assembly: AssemblyFileVersion("1.5.0.0")]
 
 namespace ItSolutions.Agent
 {
@@ -201,6 +201,17 @@ namespace ItSolutions.Agent
     {
         readonly TrayApp app;
         AgentStatus st;
+        Label pill;
+        readonly ToolTip tips = new ToolTip();
+
+        // Hinweis in der Statuszeile (z.B. Update-Pruefung). kind: 0 = neutral, 1 = ok, 2 = Warnung
+        public void SetNotice(string text, int kind)
+        {
+            if (pill == null || pill.IsDisposed) return;
+            pill.Text = "●  " + text;
+            pill.BackColor = kind == 1 ? Brand.GreenSoft : kind == 2 ? Brand.AmberSoft : Color.FromArgb(0xF0, 0xF1, 0xEE);
+            pill.ForeColor = kind == 1 ? Brand.GreenDark : kind == 2 ? Brand.AmberDark : Brand.Ink2;
+        }
 
         public DetailsForm(TrayApp app)
         {
@@ -224,7 +235,9 @@ namespace ItSolutions.Agent
             Controls.Clear();
             int w = Scale(340), x = Scale(16), y = Scale(14), inner = w - 2 * x;
 
-            var logo = new PictureBox { Image = DrawLogo(Scale(36)), Location = new Point(x, y), Size = new Size(Scale(36), Scale(36)) };
+            var logo = new PictureBox { Image = DrawLogo(Scale(36)), Location = new Point(x, y), Size = new Size(Scale(36), Scale(36)), Cursor = Cursors.Hand };
+            tips.SetToolTip(logo, "Auf Updates prüfen");
+            logo.Click += (a, b) => app.CheckForUpdatesNow(this);
             Controls.Add(logo);
             var title = Lbl("IT-Solutions Agent", x + Scale(46), y - Scale(1), inner - Scale(46), 10.5f, FontStyle.Bold, Brand.Ink);
             Controls.Add(title);
@@ -240,14 +253,14 @@ namespace ItSolutions.Agent
                 default: bg = Color.FromArgb(0xF0, 0xF1, 0xEE); fg = Brand.Ink2; txt = "Noch nicht eingerichtet"; break;
             }
             var pf = new Font("Segoe UI", 9f, FontStyle.Bold);
-            var pill = new Label { Text = "●  " + txt, BackColor = bg, ForeColor = fg, Location = new Point(x, y), Size = new Size(inner, TextH(pf) + Scale(10)), TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(Scale(8), 0, 0, 0), Font = pf, AutoEllipsis = true };
+            pill = new Label { Text = "●  " + txt, BackColor = bg, ForeColor = fg, Location = new Point(x, y), Size = new Size(inner, TextH(pf) + Scale(10)), TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(Scale(8), 0, 0, 0), Font = pf, AutoEllipsis = true };
             Controls.Add(pill);
             y += pill.Height + Scale(10);
 
             y = Row("Rechner", s.Hostname, x, y, inner);
             y = Row("IP-Adresse", s.Ip ?? "–", x, y, inner);
             if (s.CustomerName != null) y = Row("Kunde", s.CustomerName, x, y, inner);
-            y = Row("Skript-Version", s.AgentVersion > 0 ? "v" + s.AgentVersion : "–", x, y, inner);
+            y = Row("Version", (s.AgentVersion > 0 ? "Skript v" + s.AgentVersion : "Skript –") + " · Symbol " + TrayApp.RunningVersionText, x, y, inner);
             y = Row("Verbunden mit", s.CrmHost, x, y, inner);
             if (s.Health == Health.Error && s.LastMessage != null) { var m = Lbl(s.LastMessage, x, y, inner, 8f, FontStyle.Regular, Brand.RedDark); m.Height = m.Height * 2; Controls.Add(m); y += m.Height + Scale(2); }
 
@@ -450,6 +463,62 @@ namespace ItSolutions.Agent
             details.Fill(AgentStatus.Load());
             details.Show();
             details.Activate();
+        }
+
+        public static string RunningVersionText { get { return RunningVersion.Major + "." + RunningVersion.Minor; } }
+
+        // Klick auf das Logo: aktiv beim Server nachfragen. Gibt es eine neuere Skript-Version oder ein neues Symbol,
+        // wird der Collector-Task sofort gestartet - er laedt das Update (mit Signaturpruefung) und das Symbol startet neu.
+        public void CheckForUpdatesNow(DetailsForm form)
+        {
+            form.SetNotice("Suche nach Updates …", 0);
+            var ctx = SynchronizationContext.Current;
+            var st = AgentStatus.Load();
+            var t = new Thread(() =>
+            {
+                string msg; int kind;
+                try
+                {
+                    ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
+                    string baseUrl = "https://" + st.CrmHost + "/agent/";
+                    int remote = 0;
+                    using (var wc = new WebClient())
+                    {
+                        wc.Encoding = System.Text.Encoding.UTF8;
+                        var head = wc.DownloadString(baseUrl + "collector.ps1");
+                        var mm = System.Text.RegularExpressions.Regex.Match(head, @"collector-version:\s*(\d+)");
+                        if (mm.Success) remote = int.Parse(mm.Groups[1].Value);
+                        string remoteSig = wc.DownloadString(baseUrl + "IT-Solutions-Agent.exe.sig").Trim();
+                        string localSig = "";
+                        try { localSig = File.ReadAllText(ExePath + ".sig").Trim(); } catch { }
+                        bool scriptNew = remote > st.AgentVersion;
+                        bool trayNew = localSig.Length > 0 && remoteSig != localSig;
+                        if (scriptNew || trayNew)
+                        {
+                            bool started = RunCollectorTask();
+                            msg = started
+                                ? "Update wird installiert … (" + (scriptNew ? "Skript v" + remote : "neues Symbol") + ")"
+                                : "Update vorhanden, Start nicht möglich – kommt beim nächsten Lauf";
+                            kind = started ? 0 : 2;
+                        }
+                        else { msg = "Alles aktuell: Skript v" + st.AgentVersion + " · Symbol " + RunningVersionText; kind = 1; }
+                    }
+                }
+                catch (Exception ex) { msg = "Prüfung nicht möglich: " + ex.Message; kind = 2; }
+                ctx.Post(_ => { if (!form.IsDisposed) form.SetNotice(msg, kind); }, null);
+            });
+            t.IsBackground = true; t.Start();
+        }
+
+        static bool RunCollectorTask()
+        {
+            try
+            {
+                var p = Process.Start(new ProcessStartInfo("schtasks.exe", "/run /tn \"" + TaskName + "\"") { CreateNoWindow = true, UseShellExecute = false });
+                p.WaitForExit(15000);
+                return p.ExitCode == 0;
+            }
+            catch { return false; }
         }
 
         public void ReportNow()
