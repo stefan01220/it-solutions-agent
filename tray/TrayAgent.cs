@@ -28,8 +28,8 @@ using Microsoft.Win32;
 [assembly: AssemblyProduct("IT-Solutions Agent")]
 [assembly: AssemblyCompany("IT-Solutions by Stefan Regenfelder")]
 [assembly: AssemblyCopyright("(c) 2026 Stefan Regenfelder, Villach - MIT-Lizenz")]
-[assembly: AssemblyVersion("1.3.0.0")]
-[assembly: AssemblyFileVersion("1.3.0.0")]
+[assembly: AssemblyVersion("1.4.0.0")]
+[assembly: AssemblyFileVersion("1.4.0.0")]
 
 namespace ItSolutions.Agent
 {
@@ -57,16 +57,18 @@ namespace ItSolutions.Agent
         public static readonly string FilePath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "IT-Solutions-Status", "status.json");
 
-        public static AgentStatus Load()
+        public static AgentStatus Load() { return Load(FilePath); }
+
+        public static AgentStatus Load(string filePath)
         {
             var s = new AgentStatus();
             s.Hostname = Environment.MachineName;
             s.CrmHost = "managed.it-villach.at";
             try
             {
-                if (!File.Exists(FilePath)) return s;
+                if (!File.Exists(filePath)) return s;
                 string json;
-                using (var fs = new FileStream(FilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                using (var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
                 using (var sr = new StreamReader(fs)) json = sr.ReadToEnd();
                 var d = new JavaScriptSerializer().DeserializeObject(json) as System.Collections.Generic.Dictionary<string, object>;
                 if (d == null) return s;
@@ -289,12 +291,22 @@ namespace ItSolutions.Agent
             return bmp;
         }
 
+        // Bezeichnung links (so breit wie noetig), Wert rechtsbuendig daneben. Lange Werte (Kundennamen)
+        // brechen in bis zu zwei Zeilen um statt abgeschnitten zu werden.
         int Row(string k, string v, int x, int y, int w)
         {
-            Controls.Add(Lbl(k, x, y, w / 2, 9f, FontStyle.Regular, Brand.Ink2));
-            var val = Lbl(v, x + w / 3, y, w - w / 3, 9f, FontStyle.Regular, Brand.Ink); val.TextAlign = ContentAlignment.TopRight;
+            var f = new Font("Segoe UI", 9f);
+            int keyW = TextRenderer.MeasureText(k, f).Width + Scale(10);
+            int valW = w - keyW;
+            var flags = TextFormatFlags.WordBreak | TextFormatFlags.Right;
+            int lineH = TextH(f);
+            int h = TextRenderer.MeasureText(v, f, new Size(valW, 0), flags).Height;
+            h = Math.Min(Math.Max(h, lineH), lineH * 2);
+            Controls.Add(Lbl(k, x, y, keyW, 9f, FontStyle.Regular, Brand.Ink2));
+            var val = new Label { Text = v, Location = new Point(x + keyW, y), Size = new Size(valW, h + Scale(1)), Font = f, ForeColor = Brand.Ink,
+                                  TextAlign = ContentAlignment.TopRight, AutoEllipsis = true, UseMnemonic = false };
             Controls.Add(val);
-            return y + TextH(new Font("Segoe UI", 9f)) + Scale(3);
+            return y + h + Scale(3);
         }
 
         Label Lbl(string t, int x, int y, int w, float pt, FontStyle fs, Color c)
@@ -631,11 +643,11 @@ namespace ItSolutions.Agent
         static Mutex mutex;
         public static void ReleaseMutex() { try { if (mutex != null) { mutex.ReleaseMutex(); mutex.Dispose(); mutex = null; } } catch { } }
 
-        static void Render(string file)
+        static void Render(string file, string statusFile)
         {
             var app = new TrayApp(false);
             var f = new DetailsForm(app);
-            f.Fill(AgentStatus.Load());
+            f.Fill(statusFile != null ? AgentStatus.Load(statusFile) : AgentStatus.Load());
             f.KeepDetailsOpenForRender();
             f.Location = new Point(-10000, -10000);
             f.Show();
@@ -666,7 +678,7 @@ namespace ItSolutions.Agent
             // --render <datei.png>: Detailfenster + Symbole als Bild speichern (Doku/Test, ohne Bildschirm)
             if (Array.IndexOf(args, "--start-sessions") >= 0) { Environment.ExitCode = Math.Max(0, SessionLauncher.StartInAllSessions()); return; }
             int ri = Array.IndexOf(args, "--render");
-            if (ri >= 0 && ri + 1 < args.Length) { try { SetProcessDPIAware(); } catch { } Render(args[ri + 1]); return; }
+            if (ri >= 0 && ri + 1 < args.Length) { try { SetProcessDPIAware(); } catch { } Render(args[ri + 1], ri + 2 < args.Length ? args[ri + 2] : null); return; }
             bool showDetails = Array.Exists(args, a => a == "--details");
             bool created;
             // Ein Symbol je Benutzersitzung
