@@ -10,8 +10,8 @@
 # Der Collector liest Systemdaten und sendet sie ans CRM. Fernbefehle (Updates) fuehrt er nur aus,
 # wenn sie im CRM fuer dieses Geraet freigegeben sind (Opt-in, Default aus).
 #
-# Kurzform (ohne Datei, Admin-PowerShell) - den fertigen Befehl liefert crm.it-villach.at/agents:
-#   [Net.ServicePointManager]::SecurityProtocol='Tls12'; & ([scriptblock]::Create((irm https://crm.it-villach.at/agent/it-solutions-agent-setup.ps1))) -CustomerNo 10033 -Code K7M2-9QXA
+# Kurzform (ohne Datei, Admin-PowerShell) - den fertigen Befehl liefert managed.it-villach.at/agents:
+#   [Net.ServicePointManager]::SecurityProtocol='Tls12'; & ([scriptblock]::Create((irm https://managed.it-villach.at/agent/it-solutions-agent-setup.ps1))) -CustomerNo 10033 -Code K7M2-9QXA
 # Altweg mit Enrollment-Key bzw. vorab angelegtem Agent-Token:
 #   ... -CustomerNo 10033 -EnrollmentKey enr_...      oder      ... -Token ita_...
 # -Force installiert neu und legt ein NEUES Token an (sonst bleibt ein vorhandenes Token erhalten).
@@ -22,7 +22,7 @@ $ErrorActionPreference = "Stop"
 # das ab. TLS 1.2 erzwingen, sonst scheitert jeder HTTPS-Call.
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$CrmBase     = "https://crm.it-villach.at"
+$CrmBase     = "https://managed.it-villach.at"
 # Oeffentlicher Schluessel zur Pruefung der Collector-Signatur (identisch mit dem im Collector).
 $SigningKeyXml = '<RSAKeyValue><Modulus>uAxspiYovBEcA7viyD9y1pDu+gw4n/ASAGAgLZHCURTOYeD6Az/Udz8JavYAf7SQmISWfe28nVhzskliDyYyy23RiS9NpEnS0tqMXBNr+tKz29N4wOhTdyhqsIyAulxN9rK+VA+WyF9lNBmTI94OvUJ3qeebgrJpHThdVILVVhqQVwUjTJvq2ZQDoCZcofdGYVWowBRyCewoW9KMnDsoEGXy/1/nuxKRB4GicQMo4P5+HMWbNQFf+c5n+qGKE3N4TdPUHQOE38i25y5zgJ8e88Olqhla2cKfhU5wwJhZ5JgvR/R6BSt0QAxdXmkOLtfjH8SWIyHLdaUXRQyWPo4cb2bDaUsEbL3R7IapkqejvGwQJMsamoGU9xVUP0+Cj/UlpVYWQ1wSmFnIZS02LG7bpAIfkeUEhc/3/iu2nJ/PV2dROIHZ1rlxNBwcmWb0QnaYEYHd1IGHdVCMBpx2ggmgChphkbhhaGd3r84ZRt3SmIefwmx025R/CgSX/6Fvsqih</Modulus><Exponent>AQAB</Exponent></RSAKeyValue>'
 $InstallDir  = "C:\ProgramData\IT-Solutions"
@@ -64,7 +64,7 @@ if ($PSVersionTable.PSVersion.Major -lt 5) { Fail "Windows PowerShell 5.1 oder n
 try {
   $cs = Get-CimInstance Win32_ComputerSystem
   if ($cs.DomainRole -ge 4) {
-    Write-Host "Hinweis: Das ist ein Domaenencontroller. Mit install-fleet.ps1 (Befehl unter crm.it-villach.at/agents) kommen alle Server der Domaene auf einmal." -ForegroundColor Yellow
+    Write-Host "Hinweis: Das ist ein Domaenencontroller. Mit install-fleet.ps1 (Befehl unter managed.it-villach.at/agents) kommen alle Server der Domaene auf einmal." -ForegroundColor Yellow
   }
 } catch {}
 
@@ -78,7 +78,7 @@ if (-not $Token) {
     if ($Code -notmatch '^[2-9A-HJKMNP-Z]{4}-?[2-9A-HJKMNP-Z]{4}$') { Fail "Der Installationscode '$Code' hat nicht das Format XXXX-XXXX (ohne 0, O, 1, I, L)." }
   } else {
     $EnrollmentKey = "$EnrollmentKey".Trim()
-    if ($EnrollmentKey -notmatch '^enr_[0-9a-f]{20,}$') { Fail "Der Enrollment-Key sieht nicht richtig aus (erwartet enr_ + Zeichen). Besser den Installationscode verwenden: crm.it-villach.at/agents" }
+    if ($EnrollmentKey -notmatch '^enr_[0-9a-f]{20,}$') { Fail "Der Enrollment-Key sieht nicht richtig aus (erwartet enr_ + Zeichen). Besser den Installationscode verwenden: managed.it-villach.at/agents" }
   }
 }
 
@@ -212,5 +212,5 @@ if ($sent) {
 }
 Write-Host "=== Installiert, aber der erste Bericht ist NICHT angekommen ===" -ForegroundColor Red
 Write-Host "Der Task laeuft im 2-Stunden-Takt weiter. Fehlerursache siehe oben bzw. $LogFile." -ForegroundColor Yellow
-Write-Host "Haeufig: Proxy/Firewall blockiert ausgehend HTTPS zu crm.it-villach.at oder falsche Systemzeit." -ForegroundColor Yellow
+Write-Host "Haeufig: Proxy/Firewall blockiert ausgehend HTTPS zu managed.it-villach.at oder falsche Systemzeit." -ForegroundColor Yellow
 exit 2

@@ -1,7 +1,7 @@
 # IT-Solutions Agent
 
 Der Agent, mit dem **IT-Solutions – Stefan Regenfelder IT, Villach** die Rechner und Server seiner Wartungskunden im Blick behält.
-Er liest den Zustand eines Systems (Updates, Speicher, Virenschutz, Sicherung, Dienste) und meldet ihn alle 2 Stunden an das IT-Solutions-CRM unter `crm.it-villach.at`.
+Er liest den Zustand eines Systems (Updates, Speicher, Virenschutz, Sicherung, Dienste) und meldet ihn alle 2 Stunden an IT-Solutions unter `managed.it-villach.at`.
 
 Der Quellcode ist offen, damit jeder Kunde nachsehen kann, was auf seinem Rechner läuft.
 
@@ -27,13 +27,13 @@ Der Quellcode ist offen, damit jeder Kunde nachsehen kann, was auf seinem Rechne
 ## Installation
 
 Installiert wird mit einem **Installationscode**, den IT-Solutions im CRM für einen Kunden erzeugt (24 Stunden gültig).
-Kundennummer und Code auf **https://crm.it-villach.at/agents** eingeben; die Seite zeigt den fertigen Befehl für Windows, Windows-Domäne oder Linux/Synology.
+Kundennummer und Code auf **https://managed.it-villach.at/agents** eingeben; die Seite zeigt den fertigen Befehl für Windows, Windows-Domäne oder Linux/Synology.
 
 ## Sicherheit
 
 - **Signierte Updates:** Der Collector aktualisiert sich selbst, aber nur mit einer gültigen RSA-3072-Signatur (SHA-256). Der öffentliche Schlüssel steht im Code; der private Schlüssel liegt ausschließlich bei IT-Solutions. Eine manipulierte Datei wird nicht installiert.
 - **Token-Schutz:** Die Konfiguration mit dem Token ist unter Windows nur für SYSTEM und Administratoren lesbar, unter Linux nur für root.
-- **Nur ausgehend:** Der Agent öffnet keine Ports. Er spricht ausschließlich per HTTPS mit `crm.it-villach.at`.
+- **Nur ausgehend:** Der Agent öffnet keine Ports. Er spricht ausschließlich per HTTPS mit `managed.it-villach.at`.
 - Sicherheitslücken bitte an `support@it-villach.at` melden (siehe [SECURITY.md](SECURITY.md)).
 
 ## Lizenz

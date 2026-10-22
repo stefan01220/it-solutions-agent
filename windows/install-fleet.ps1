@@ -4,16 +4,16 @@
 # ausfuehren. Es werden KEINE Passwoerter eingegeben: die Verbindung zu den Servern laeuft mit deinem angemeldeten
 # Domaenen-Konto (Kerberos, PowerShell-Remoting/WinRM).
 #
-# Den fertigen Befehl (Kundennummer + Installationscode) erzeugt das CRM unter crm.it-villach.at/agents bzw.
+# Den fertigen Befehl (Kundennummer + Installationscode) erzeugt das CRM unter managed.it-villach.at/agents bzw.
 # Einstellungen -> Asset-Collector. Ohne Datei, direkt aus dem Speicher:
 # 1) Trockenlauf (Standard) - listet nur, aendert nichts:
-#      [Net.ServicePointManager]::SecurityProtocol='Tls12'; & ([scriptblock]::Create((irm https://crm.it-villach.at/agent/install-fleet.ps1))) -CustomerNo 10012 -Code K7M2-9QXA
+#      [Net.ServicePointManager]::SecurityProtocol='Tls12'; & ([scriptblock]::Create((irm https://managed.it-villach.at/agent/install-fleet.ps1))) -CustomerNo 10012 -Code K7M2-9QXA
 # 2) Installieren (auf allen erreichbaren Servern, die noch keinen Collector haben): dieselbe Zeile mit -Install am Ende.
 # Der Code gilt fuer 25 Installationen; statt -Code geht auch der alte Weg -EnrollmentKey enr_...
 # Optional: -Computers SRV1,SRV2 (nur diese), -Exclude SRV3 (diese auslassen), -IncludeClients (auch Arbeitsplaetze),
 #           -EnableSsh (richtet zusaetzlich den passwortlosen SSH-Wartungszugang ein, nur aus dem HQ erreichbar).
 #
-# Je Server wird der normale Installer geladen (https://crm.it-villach.at, Signaturpruefung des Collectors inklusive)
+# Je Server wird der normale Installer geladen (https://managed.it-villach.at, Signaturpruefung des Collectors inklusive)
 # und mit Kundennummer + Enrollment-Key ausgefuehrt; jeder Server bekommt sein eigenes Token.
 # Server ausserhalb der Domaene (Workgroup) und ohne Internet werden am Ende aufgelistet - dort manuell installieren.
 param(
@@ -32,8 +32,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-$CrmBase = "https://crm.it-villach.at"
-if (-not $Code -and -not $EnrollmentKey) { throw "Bitte -Code (Installationscode, siehe crm.it-villach.at/agents) angeben." }
+$CrmBase = "https://managed.it-villach.at"
+if (-not $Code -and -not $EnrollmentKey) { throw "Bitte -Code (Installationscode, siehe managed.it-villach.at/agents) angeben." }
 if ($Code -and $Code -notmatch '^[2-9A-HJKMNP-Za-hjkmnp-z]{4}-?[2-9A-HJKMNP-Za-hjkmnp-z]{4}$') { throw "Der Installationscode '$Code' hat nicht das Format XXXX-XXXX." }
 if ($CustomerNo -notmatch '^\d{3,8}$') { throw "Die Kundennummer '$CustomerNo' ist keine Zahl (Platzhalter nicht ersetzt?)." }
 

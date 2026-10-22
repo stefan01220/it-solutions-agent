@@ -1,5 +1,5 @@
 # IT-Solutions Asset-Collector
-# collector-version: 12
+# collector-version: 13
 # Infrastruktur-Scan (nur lesend) -> POST an das CRM. Zusaetzlich fuehrt er die FESTEN Befehle
 # windows-update, winget-upgrade, rescan und reboot aus, wenn das CRM sie fuer dieses Geraet
 # freigegeben hat (Opt-in) und der Nutzer sie ausgeloest hat. Kein freies Skript, kein Fernzugriff.
@@ -21,13 +21,25 @@ $ErrorActionPreference = "Stop"
 # TLS 1.2 erzwingen (Windows PowerShell 5.1 nutzt sonst veraltetes TLS).
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$CollectorVersion = 12
+$CollectorVersion = 13
 $SigningKeyXml = '<RSAKeyValue><Modulus>uAxspiYovBEcA7viyD9y1pDu+gw4n/ASAGAgLZHCURTOYeD6Az/Udz8JavYAf7SQmISWfe28nVhzskliDyYyy23RiS9NpEnS0tqMXBNr+tKz29N4wOhTdyhqsIyAulxN9rK+VA+WyF9lNBmTI94OvUJ3qeebgrJpHThdVILVVhqQVwUjTJvq2ZQDoCZcofdGYVWowBRyCewoW9KMnDsoEGXy/1/nuxKRB4GicQMo4P5+HMWbNQFf+c5n+qGKE3N4TdPUHQOE38i25y5zgJ8e88Olqhla2cKfhU5wwJhZ5JgvR/R6BSt0QAxdXmkOLtfjH8SWIyHLdaUXRQyWPo4cb2bDaUsEbL3R7IapkqejvGwQJMsamoGU9xVUP0+Cj/UlpVYWQ1wSmFnIZS02LG7bpAIfkeUEhc/3/iu2nJ/PV2dROIHZ1rlxNBwcmWb0QnaYEYHd1IGHdVCMBpx2ggmgChphkbhhaGd3r84ZRt3SmIefwmx025R/CgSX/6Fvsqih</Modulus><Exponent>AQAB</Exponent></RSAKeyValue>'
 
 $cfgPath = Join-Path $PSScriptRoot "agent-config.json"
 if (-not (Test-Path $cfgPath)) { Write-Error "agent-config.json fehlt"; exit 1 }
 $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
 if (-not $cfg.token -or -not $cfg.reportUrl) { Write-Error "Config unvollstaendig"; exit 1 }
+
+# Umzug auf den Agent-Host (2026-10-22): crm.it-villach.at -> managed.it-villach.at. Nur wenn der neue Host von hier
+# erreichbar ist (Kunden-Firewalls mit Freigabeliste); sonst bleibt es bei crm, das die Agent-Pfade weiter bedient.
+if ($cfg.reportUrl -match '^https://crm\.it-villach\.at/') {
+  try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    $newUrl = $cfg.reportUrl -replace '^https://crm\.it-villach\.at/', 'https://managed.it-villach.at/'
+    $null = Invoke-WebRequest -Uri ($newUrl -replace '/api/agent/report$', '/agent/collector.ps1.sig') -UseBasicParsing -TimeoutSec 15
+    $cfg.reportUrl = $newUrl
+    $cfg | ConvertTo-Json | Set-Content -Path $cfgPath -Encoding UTF8
+  } catch {}
+}
 
 function Safe($block, $default = $null) {
   try { & $block } catch { return $default }

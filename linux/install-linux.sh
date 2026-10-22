@@ -3,18 +3,18 @@
 # =================================================
 # Als root ausfuehren. Richtet den Linux-Collector ein (nur lesend, meldet alle 2 Stunden ans CRM):
 #   sudo sh install-linux.sh --token ita_...                          (Token vorab im CRM angelegt)
-#   sudo sh install-linux.sh --customer-no 10057 --code K7M2-9QXA              (Installationscode, Standard - crm.it-villach.at/agents)
+#   sudo sh install-linux.sh --customer-no 10057 --code K7M2-9QXA              (Installationscode, Standard - managed.it-villach.at/agents)
 #   sudo sh install-linux.sh --customer-no 10057 --enrollment-key enr_...      (Altweg)
 #   sudo sh install-linux.sh --uninstall
 #
 # Schnellstart:
-#   curl -fsSL https://crm.it-villach.at/agent/install-linux.sh -o /tmp/its-install.sh && sudo sh /tmp/its-install.sh --customer-no 10057 --code K7M2-9QXA
+#   curl -fsSL https://managed.it-villach.at/agent/install-linux.sh -o /tmp/its-install.sh && sudo sh /tmp/its-install.sh --customer-no 10057 --code K7M2-9QXA
 #
 # Voraussetzungen: python3, openssl, curl oder wget. Der Collector wird vor der Installation gegen den
 # eingebetteten oeffentlichen Schluessel geprueft (RSA-SHA256), Updates ebenso.
 set -eu
 
-CRM_BASE="https://crm.it-villach.at"
+CRM_BASE="https://managed.it-villach.at"
 INSTALL_DIR="/opt/it-solutions-agent"
 CONF_DIR="/etc/it-solutions-agent"
 UNIT_DIR="/etc/systemd/system"
@@ -109,7 +109,7 @@ if [ -z "$TOKEN" ] && [ "$FORCE" -eq 0 ] && [ -f "$CONF_DIR/config.json" ]; then
   fi
 fi
 if [ -z "$TOKEN" ]; then
-  [ -n "$CUSTOMER_NO" ] && { [ -n "$CODE" ] || [ -n "$ENROLL_KEY" ]; } || die "Bitte --customer-no und --code angeben (Code: crm.it-villach.at/agents), alternativ --token."
+  [ -n "$CUSTOMER_NO" ] && { [ -n "$CODE" ] || [ -n "$ENROLL_KEY" ]; } || die "Bitte --customer-no und --code angeben (Code: managed.it-villach.at/agents), alternativ --token."
   case "$CUSTOMER_NO" in *[!0-9]*|"") die "Die Kundennummer '$CUSTOMER_NO' ist keine Zahl." ;; esac
   say "[1/4] Anmeldung beim CRM ..."
   python3 - "$CRM_BASE" "$CUSTOMER_NO" "$CODE" "$ENROLL_KEY" "$(hostname)" > "$TMP/enroll.json" 2>"$TMP/enroll.err" <<'PYENROLL' || ENROLL_FAIL=1

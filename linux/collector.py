@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # IT-Solutions Asset-Collector (Linux)
-# collector-version: 3
+# collector-version: 4
 # Infrastruktur-Scan (nur lesend) -> POST an das CRM (/api/agent/report). Dieselben Schnittstellen,
 # Tokens und dieselbe Ampel wie der Windows-Collector. Fuehrt KEINE Fernbefehle aus und aendert nichts am System.
 #
@@ -31,7 +31,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 
-COLLECTOR_VERSION = 3
+COLLECTOR_VERSION = 4
 CONFIG_PATH = os.environ.get("ITS_AGENT_CONFIG", "/etc/it-solutions-agent/config.json")
 PUBLIC_KEY_PEM = """-----BEGIN PUBLIC KEY-----
 MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAuAxspiYovBEcA7viyD9y
@@ -756,6 +756,25 @@ def build_payload(cfg, update_status, started):
     }
 
 
+def migrate_host(cfg):
+    """Umzug auf den Agent-Host (2026-10-22): crm.it-villach.at -> managed.it-villach.at, nur wenn erreichbar."""
+    old = cfg.get("reportUrl", "")
+    if not old.startswith("https://crm.it-villach.at/"):
+        return
+    new = "https://managed.it-villach.at/" + old[len("https://crm.it-villach.at/"):]
+    try:
+        probe = re.sub(r"/api/agent/report$", "/agent/collector.py.sig", new)
+        with urllib.request.urlopen(probe, timeout=15) as r:
+            r.read(64)
+        cfg["reportUrl"] = new
+        fd = os.open(CONFIG_PATH + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump(cfg, f, indent=2)
+        os.replace(CONFIG_PATH + ".tmp", CONFIG_PATH)
+    except Exception:
+        pass
+
+
 def main():
     dry_run = "--dry-run" in sys.argv
     started = time.time()
@@ -768,6 +787,7 @@ def main():
     if not cfg.get("token") or not cfg.get("reportUrl"):
         print("Config unvollstaendig")
         return 1
+    migrate_host(cfg)
 
     status = self_update(cfg, dry_run) if "--no-update" not in sys.argv else "skipped"
     payload = build_payload(cfg, status, started)
