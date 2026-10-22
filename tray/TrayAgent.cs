@@ -28,8 +28,8 @@ using Microsoft.Win32;
 [assembly: AssemblyProduct("IT-Solutions Agent")]
 [assembly: AssemblyCompany("IT-Solutions by Stefan Regenfelder")]
 [assembly: AssemblyCopyright("(c) 2026 Stefan Regenfelder, Villach - MIT-Lizenz")]
-[assembly: AssemblyVersion("1.1.0.0")]
-[assembly: AssemblyFileVersion("1.1.0.0")]
+[assembly: AssemblyVersion("1.2.0.0")]
+[assembly: AssemblyFileVersion("1.2.0.0")]
 
 namespace ItSolutions.Agent
 {
@@ -220,13 +220,14 @@ namespace ItSolutions.Agent
         {
             st = s;
             Controls.Clear();
-            int w = Scale(320), x = Scale(16), y = Scale(14), inner = w - 2 * x;
+            int w = Scale(340), x = Scale(16), y = Scale(14), inner = w - 2 * x;
 
             var logo = new PictureBox { Image = DrawLogo(Scale(36)), Location = new Point(x, y), Size = new Size(Scale(36), Scale(36)) };
             Controls.Add(logo);
-            Controls.Add(Lbl("IT-Solutions Agent", x + Scale(46), y, inner - Scale(46), 10.5f, FontStyle.Bold, Brand.Ink));
-            Controls.Add(Lbl("Managed by " + s.Provider.Name.Replace("IT-Solutions by ", "") + " IT · " + CityShort(s.Provider.City), x + Scale(46), y + Scale(20), inner - Scale(46), 8.5f, FontStyle.Regular, Brand.Ink2));
-            y += Scale(48);
+            var title = Lbl("IT-Solutions Agent", x + Scale(46), y - Scale(1), inner - Scale(46), 10.5f, FontStyle.Bold, Brand.Ink);
+            Controls.Add(title);
+            Controls.Add(Lbl("Managed by " + s.Provider.Name.Replace("IT-Solutions by ", "") + " IT · " + CityShort(s.Provider.City), x + Scale(46), y - Scale(1) + title.Height, inner - Scale(46), 8.5f, FontStyle.Regular, Brand.Ink2));
+            y += Math.Max(Scale(36), title.Height * 2) + Scale(12);
 
             Color bg, fg; string txt;
             switch (s.Health)
@@ -236,30 +237,33 @@ namespace ItSolutions.Agent
                 case Health.Error: bg = Brand.RedSoft; fg = Brand.RedDark; txt = s.LastSuccessAt.HasValue ? "Keine Verbindung · zuletzt " + s.AgeText() : "Bericht fehlgeschlagen"; break;
                 default: bg = Color.FromArgb(0xF0, 0xF1, 0xEE); fg = Brand.Ink2; txt = "Noch nicht eingerichtet"; break;
             }
-            var pill = new Label { Text = "●  " + txt, BackColor = bg, ForeColor = fg, Location = new Point(x, y), Size = new Size(inner, Scale(26)), TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(Scale(8), 0, 0, 0), Font = new Font("Segoe UI", 9f, FontStyle.Bold) };
+            var pf = new Font("Segoe UI", 9f, FontStyle.Bold);
+            var pill = new Label { Text = "●  " + txt, BackColor = bg, ForeColor = fg, Location = new Point(x, y), Size = new Size(inner, TextH(pf) + Scale(10)), TextAlign = ContentAlignment.MiddleLeft, Padding = new Padding(Scale(8), 0, 0, 0), Font = pf, AutoEllipsis = true };
             Controls.Add(pill);
-            y += Scale(34);
+            y += pill.Height + Scale(10);
 
             y = Row("Rechner", s.Hostname, x, y, inner);
             y = Row("IP-Adresse", s.Ip ?? "–", x, y, inner);
             if (s.CustomerName != null) y = Row("Kunde", s.CustomerName, x, y, inner);
             y = Row("Skript-Version", s.AgentVersion > 0 ? "v" + s.AgentVersion : "–", x, y, inner);
             y = Row("Verbunden mit", s.CrmHost, x, y, inner);
-            if (s.Health == Health.Error && s.LastMessage != null) { var m = Lbl(s.LastMessage, x, y, inner, 8f, FontStyle.Regular, Brand.RedDark); m.Height = Scale(30); Controls.Add(m); y += Scale(32); }
+            if (s.Health == Health.Error && s.LastMessage != null) { var m = Lbl(s.LastMessage, x, y, inner, 8f, FontStyle.Regular, Brand.RedDark); m.Height = m.Height * 2; Controls.Add(m); y += m.Height + Scale(2); }
 
             y += Scale(6);
             Controls.Add(new Label { BackColor = Brand.Line, Location = new Point(x, y), Size = new Size(inner, 1) });
             y += Scale(8);
-            Controls.Add(Lbl("Support", x, y, inner, 9f, FontStyle.Bold, Brand.Ink)); y += Scale(19);
-            Controls.Add(Lbl(s.Provider.Phone, x, y, inner, 9f, FontStyle.Regular, Brand.Ink2)); y += Scale(18);
-            Controls.Add(Lbl(s.Provider.Email, x, y, inner, 9f, FontStyle.Regular, Brand.Ink2)); y += Scale(18);
-            Controls.Add(Lbl(s.Provider.Website, x, y, inner, 9f, FontStyle.Regular, Brand.Ink2)); y += Scale(26);
+            foreach (var line in new[] { "Support", s.Provider.Phone, s.Provider.Email, s.Provider.Website })
+            {
+                var l = Lbl(line, x, y, inner, 9f, line == "Support" ? FontStyle.Bold : FontStyle.Regular, line == "Support" ? Brand.Ink : Brand.Ink2);
+                Controls.Add(l); y += l.Height + Scale(1);
+            }
+            y += Scale(10);
 
             int bw = (inner - Scale(8)) / 2;
             var report = Btn("Jetzt melden", x, y, bw, true); report.Click += (a, b) => app.ReportNow();
-            var support = Btn("Fernwartung starten", x + bw + Scale(8), y, bw, false); support.Click += (a, b) => app.StartSupport();
+            var support = Btn("Fernwartung", x + bw + Scale(8), y, bw, false); support.Click += (a, b) => app.StartSupport();
             Controls.Add(report); Controls.Add(support);
-            y += Scale(34) + Scale(14);
+            y += report.Height + Scale(14);
 
             ClientSize = new Size(w, y);
             var wa = Screen.PrimaryScreen.WorkingArea;
@@ -290,24 +294,30 @@ namespace ItSolutions.Agent
             Controls.Add(Lbl(k, x, y, w / 2, 9f, FontStyle.Regular, Brand.Ink2));
             var val = Lbl(v, x + w / 3, y, w - w / 3, 9f, FontStyle.Regular, Brand.Ink); val.TextAlign = ContentAlignment.TopRight;
             Controls.Add(val);
-            return y + Scale(20);
+            return y + TextH(new Font("Segoe UI", 9f)) + Scale(3);
         }
 
         Label Lbl(string t, int x, int y, int w, float pt, FontStyle fs, Color c)
         {
-            return new Label { Text = t, Location = new Point(x, y), Size = new Size(w, Scale((int)(pt * 2.2f))), Font = new Font("Segoe UI", pt, fs), ForeColor = c, AutoEllipsis = true, UseMnemonic = false };
+            var f = new Font("Segoe UI", pt, fs);
+            return new Label { Text = t, Location = new Point(x, y), Size = new Size(w, TextH(f) + Scale(1)), Font = f, ForeColor = c, AutoEllipsis = true, UseMnemonic = false };
         }
 
         Button Btn(string t, int x, int y, int w, bool primary)
         {
-            var b = new Button { Text = t, Location = new Point(x, y), Size = new Size(w, Scale(32)), FlatStyle = FlatStyle.Flat, Font = new Font("Segoe UI", 9f, FontStyle.Bold), Cursor = Cursors.Hand };
+            var bf = new Font("Segoe UI", 9f, FontStyle.Bold);
+            var b = new Button { Text = t, Location = new Point(x, y), Size = new Size(w, TextH(bf) + Scale(14)), FlatStyle = FlatStyle.Flat, Font = bf, Cursor = Cursors.Hand };
             b.FlatAppearance.BorderColor = primary ? Brand.Green : Brand.Line;
             b.BackColor = primary ? Brand.Green : Color.White;
             b.ForeColor = primary ? Color.White : Brand.Ink;
             return b;
         }
 
-        int Scale(int px) { return (int)Math.Round(px * DeviceDpi / 96.0); }
+        // Control.DeviceDpi liefert in .NET 4.8 ohne Per-Monitor-Konfiguration immer 96 - die echte System-DPI kommt aus GDI.
+        static float dpi;
+        static float Dpi { get { if (dpi <= 0) { using (var g = Graphics.FromHwnd(IntPtr.Zero)) dpi = g.DpiX; } return dpi; } }
+        static int Scale(int px) { return (int)Math.Round(px * Dpi / 96.0); }
+        static int TextH(Font f) { return TextRenderer.MeasureText("Ag", f).Height; }
 
         protected override void OnPaint(PaintEventArgs e)
         {
@@ -363,8 +373,31 @@ namespace ItSolutions.Agent
             if (showDetails) { KeepDetailsOpen = true; ShowDetails(); }
         }
 
+        // Der Collector ersetzt die EXE im laufenden Betrieb (alte Datei wird umbenannt). Liegt unter dem
+        // Startpfad eine neuere Version, startet sich das Symbol einmal neu - sonst bliebe die alte bis zur Abmeldung.
+        static readonly string ExePath = Assembly.GetExecutingAssembly().Location;
+        static readonly Version RunningVersion = Assembly.GetExecutingAssembly().GetName().Version;
+        bool restarting;
+
+        void CheckForUpdate()
+        {
+            if (restarting || KeepDetailsOpen) return;
+            try
+            {
+                var onDisk = new Version(FileVersionInfo.GetVersionInfo(ExePath).FileVersion);
+                if (onDisk <= RunningVersion) return;
+                restarting = true;
+                Program.ReleaseMutex();
+                Process.Start(new ProcessStartInfo(ExePath) { UseShellExecute = false });
+                ExitThread();
+            }
+            catch { }
+        }
+
         void Refresh()
         {
+            CheckForUpdate();
+            if (restarting) return;
             status = AgentStatus.Load();
             var h = status.Health;
             if (h != lastHealth)
@@ -595,6 +628,8 @@ namespace ItSolutions.Agent
     static class Program
     {
         [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
+        static Mutex mutex;
+        public static void ReleaseMutex() { try { if (mutex != null) { mutex.ReleaseMutex(); mutex.Dispose(); mutex = null; } } catch { } }
 
         static void Render(string file)
         {
@@ -631,18 +666,22 @@ namespace ItSolutions.Agent
             // --render <datei.png>: Detailfenster + Symbole als Bild speichern (Doku/Test, ohne Bildschirm)
             if (Array.IndexOf(args, "--start-sessions") >= 0) { Environment.ExitCode = Math.Max(0, SessionLauncher.StartInAllSessions()); return; }
             int ri = Array.IndexOf(args, "--render");
-            if (ri >= 0 && ri + 1 < args.Length) { Render(args[ri + 1]); return; }
+            if (ri >= 0 && ri + 1 < args.Length) { try { SetProcessDPIAware(); } catch { } Render(args[ri + 1]); return; }
             bool showDetails = Array.Exists(args, a => a == "--details");
             bool created;
             // Ein Symbol je Benutzersitzung
-            using (var m = new Mutex(true, "Local\\ITSolutionsAgentTray", out created))
+            mutex = new Mutex(true, "Local\\ITSolutionsAgentTray", out created);
+            if (!created && !showDetails)
             {
-                if (!created && !showDetails) return;
-                try { SetProcessDPIAware(); } catch { }
-                Application.EnableVisualStyles();
-                Application.SetCompatibleTextRenderingDefault(false);
-                Application.Run(new TrayApp(showDetails));
+                // Direkt nach einem Update-Neustart haelt die alte Instanz den Mutex evtl. noch kurz.
+                try { created = mutex.WaitOne(5000); } catch (AbandonedMutexException) { created = true; }
+                if (!created) return;
             }
+            try { SetProcessDPIAware(); } catch { }
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+            Application.Run(new TrayApp(showDetails));
+            ReleaseMutex();
         }
     }
 }
