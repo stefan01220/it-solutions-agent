@@ -28,8 +28,8 @@ using Microsoft.Win32;
 [assembly: AssemblyProduct("IT-Solutions Agent")]
 [assembly: AssemblyCompany("IT-Solutions by Stefan Regenfelder")]
 [assembly: AssemblyCopyright("(c) 2026 Stefan Regenfelder, Villach - MIT-Lizenz")]
-[assembly: AssemblyVersion("1.7.0.0")]
-[assembly: AssemblyFileVersion("1.7.0.0")]
+[assembly: AssemblyVersion("1.8.0.0")]
+[assembly: AssemblyFileVersion("1.8.0.0")]
 
 namespace ItSolutions.Agent
 {
@@ -279,7 +279,13 @@ namespace ItSolutions.Agent
             tips.SetToolTip(logo, "Auf Updates prüfen");
             logo.Click += (a, b) => app.CheckForUpdatesNow(this);
             Controls.Add(logo);
-            var title = Lbl("IT-Solutions Agent", x + Scale(46), y - Scale(1), inner - Scale(46), 10.5f, FontStyle.Bold, Brand.Ink);
+            var verText = (s.AgentVersion > 0 ? "v" + s.AgentVersion : "v–") + " · " + TrayApp.RunningVersionText;
+            var verFont = new Font("Segoe UI", 8f);
+            int verW = TextRenderer.MeasureText(verText, verFont).Width + Scale(4);
+            var ver = new Label { Text = verText, Font = verFont, ForeColor = Brand.Ink2, Location = new Point(x + inner - verW, y), Size = new Size(verW, TextH(verFont) + Scale(1)), TextAlign = ContentAlignment.TopRight };
+            tips.SetToolTip(ver, "Skript v" + s.AgentVersion + " · Symbol " + TrayApp.RunningVersionText);
+            Controls.Add(ver);
+            var title = Lbl("IT-Solutions Agent", x + Scale(46), y - Scale(1), inner - Scale(46) - verW, 10.5f, FontStyle.Bold, Brand.Ink);
             Controls.Add(title);
             Controls.Add(Lbl("Managed by " + s.Provider.Name.Replace("IT-Solutions by ", "") + " IT · " + CityShort(s.Provider.City), x + Scale(46), y - Scale(1) + title.Height, inner - Scale(46), 8.5f, FontStyle.Regular, Brand.Ink2));
             y += Math.Max(Scale(36), title.Height * 2) + Scale(12);
@@ -335,7 +341,6 @@ namespace ItSolutions.Agent
                 var age = (DateTime.Now - s.LastPatchAt.Value).TotalDays;
                 y = Row("Letztes Update", s.LastPatchAt.Value.ToString("dd.MM.yyyy"), x, y, inner, age > 60 ? Brand.AmberDark : (Color?)null);
             }
-            y = Row("Version", (s.AgentVersion > 0 ? "Skript v" + s.AgentVersion : "Skript \u2013") + " \u00b7 Symbol " + TrayApp.RunningVersionText, x, y, inner);
             y = Row("Verbunden mit", s.CrmHost, x, y, inner);
             if (s.Health == Health.Error && s.LastMessage != null) { var m = Lbl(s.LastMessage, x, y, inner, 8f, FontStyle.Regular, Brand.RedDark); m.Height = m.Height * 2; Controls.Add(m); y += m.Height + Scale(2); }
 
