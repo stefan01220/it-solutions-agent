@@ -28,8 +28,8 @@ using Microsoft.Win32;
 [assembly: AssemblyProduct("IT-Solutions Agent")]
 [assembly: AssemblyCompany("IT-Solutions by Stefan Regenfelder")]
 [assembly: AssemblyCopyright("(c) 2026 Stefan Regenfelder, Villach - MIT-Lizenz")]
-[assembly: AssemblyVersion("1.5.0.0")]
-[assembly: AssemblyFileVersion("1.5.0.0")]
+[assembly: AssemblyVersion("1.6.0.0")]
+[assembly: AssemblyFileVersion("1.6.0.0")]
 
 namespace ItSolutions.Agent
 {
@@ -50,7 +50,8 @@ namespace ItSolutions.Agent
     {
         public int AgentVersion;
         public string Hostname, Ip, CrmHost, LastResult, LastMessage, CustomerName;
-        public DateTime? LastRunAt, LastSuccessAt;
+        public string TeamViewerId, Manufacturer, Model, Serial, Domain, OsName, OsProduct, ContractNo;
+        public DateTime? LastRunAt, LastSuccessAt, OsSupportEnd, LastPatchAt;
         public Provider Provider = new Provider();
         public bool Present;
 
@@ -82,6 +83,16 @@ namespace ItSolutions.Agent
                 s.CustomerName = Str(d, "customerName");
                 s.LastRunAt = Date(d, "lastRunAt");
                 s.LastSuccessAt = Date(d, "lastSuccessAt");
+                s.TeamViewerId = Str(d, "teamviewerId");
+                s.Manufacturer = Str(d, "manufacturer");
+                s.Model = Str(d, "model");
+                s.Serial = Str(d, "serial");
+                s.Domain = Str(d, "domain");
+                s.OsName = Str(d, "osName");
+                s.OsProduct = Str(d, "osProduct");
+                s.OsSupportEnd = Date(d, "osSupportEnd");
+                s.ContractNo = Str(d, "contractNo");
+                s.LastPatchAt = Date(d, "lastPatchAt");
                 var p = d.ContainsKey("provider") ? d["provider"] as System.Collections.Generic.Dictionary<string, object> : null;
                 if (p != null)
                 {
@@ -112,6 +123,32 @@ namespace ItSolutions.Agent
             DateTime t;
             return DateTime.TryParse(Str(d, k), null, System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal, out t)
                 ? (DateTime?)t.ToLocalTime() : null;
+        }
+
+        public static string ReadTeamViewerId()
+        {
+            foreach (var view in new[] { RegistryView.Registry64, RegistryView.Registry32 })
+            {
+                try
+                {
+                    using (var b = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, view))
+                    using (var k = b.OpenSubKey("SOFTWARE\\TeamViewer"))
+                    {
+                        var v = k == null ? null : k.GetValue("ClientID");
+                        if (v != null && Convert.ToString(v) != "0") return Convert.ToString(v);
+                    }
+                }
+                catch { }
+            }
+            return null;
+        }
+
+        public static string FormatTeamViewerId(string id)
+        {
+            if (string.IsNullOrEmpty(id)) return id;
+            var t = id.Trim(); var sb = new System.Text.StringBuilder();
+            for (int i = 0; i < t.Length; i++) { if (i > 0 && (t.Length - i) % 3 == 0) sb.Append(' '); sb.Append(t[i]); }
+            return sb.ToString();
         }
 
         public Health Health
@@ -257,10 +294,45 @@ namespace ItSolutions.Agent
             Controls.Add(pill);
             y += pill.Height + Scale(10);
 
-            y = Row("Rechner", s.Hostname, x, y, inner);
-            y = Row("IP-Adresse", s.Ip ?? "–", x, y, inner);
+            // Abschnitt Rechner
+            y = Section("Rechner", x, y, inner);
+            y = Row("Rechner", s.Hostname + (s.Domain != null ? " (" + s.Domain + ")" : ""), x, y, inner);
+            y = Row("Benutzer", Environment.UserDomainName + "\\" + Environment.UserName, x, y, inner);
+            y = Row("IP-Adresse", s.Ip ?? "\u2013", x, y, inner);
+            var device = ((s.Manufacturer ?? "") + " " + (s.Model ?? "")).Trim();
+            if (device.Length > 0) y = Row("Ger\u00e4t", device, x, y, inner);
+            if (s.Serial != null) y = Row("Seriennummer", s.Serial, x, y, inner);
+            var tv = AgentStatus.ReadTeamViewerId() ?? s.TeamViewerId;
+            if (tv != null)
+            {
+                var tvRowY = y;
+                y = Row("TeamViewer-ID", AgentStatus.FormatTeamViewerId(tv), x, y, inner, Brand.GreenDark);
+                var val = Controls[Controls.Count - 1];
+                val.Cursor = Cursors.Hand;
+                tips.SetToolTip(val, "Klicken zum Kopieren");
+                var tvCopy = tv;
+                val.Click += (a, b) => { try { Clipboard.SetText(tvCopy); SetNotice("TeamViewer-ID kopiert: " + AgentStatus.FormatTeamViewerId(tvCopy), 1); } catch { } };
+            }
+
+            // Abschnitt Betreuung
+            y += Scale(4);
+            y = Section("Betreuung", x, y, inner);
             if (s.CustomerName != null) y = Row("Kunde", s.CustomerName, x, y, inner);
-            y = Row("Version", (s.AgentVersion > 0 ? "Skript v" + s.AgentVersion : "Skript –") + " · Symbol " + TrayApp.RunningVersionText, x, y, inner);
+            y = Row("Wartungsvertrag", s.ContractNo ?? "kein Wartungsvertrag", x, y, inner, s.ContractNo == null ? Brand.AmberDark : (Color?)null);
+            var osText = s.OsProduct ?? (s.OsName != null ? s.OsName.Replace("Microsoft ", "") : null);
+            if (osText != null) y = Row("Betriebssystem", osText, x, y, inner);
+            if (s.OsSupportEnd.HasValue)
+            {
+                var days = (s.OsSupportEnd.Value.Date - DateTime.Today).TotalDays;
+                var txtEnd = days < 0 ? "beendet seit " + s.OsSupportEnd.Value.ToString("dd.MM.yyyy") : "bis " + s.OsSupportEnd.Value.ToString("dd.MM.yyyy");
+                y = Row("Sicherheitsupdates", txtEnd, x, y, inner, days < 0 ? Brand.RedDark : days < 180 ? Brand.AmberDark : (Color?)null);
+            }
+            if (s.LastPatchAt.HasValue)
+            {
+                var age = (DateTime.Now - s.LastPatchAt.Value).TotalDays;
+                y = Row("Letztes Update", s.LastPatchAt.Value.ToString("dd.MM.yyyy"), x, y, inner, age > 60 ? Brand.AmberDark : (Color?)null);
+            }
+            y = Row("Version", (s.AgentVersion > 0 ? "Skript v" + s.AgentVersion : "Skript \u2013") + " \u00b7 Symbol " + TrayApp.RunningVersionText, x, y, inner);
             y = Row("Verbunden mit", s.CrmHost, x, y, inner);
             if (s.Health == Health.Error && s.LastMessage != null) { var m = Lbl(s.LastMessage, x, y, inner, 8f, FontStyle.Regular, Brand.RedDark); m.Height = m.Height * 2; Controls.Add(m); y += m.Height + Scale(2); }
 
@@ -274,8 +346,11 @@ namespace ItSolutions.Agent
             }
             y += Scale(10);
 
+            var problem = Btn("Problem melden", x, y, inner, true); problem.Click += (a, b) => app.ShowProblemForm();
+            Controls.Add(problem);
+            y += problem.Height + Scale(8);
             int bw = (inner - Scale(8)) / 2;
-            var report = Btn("Jetzt melden", x, y, bw, true); report.Click += (a, b) => app.ReportNow();
+            var report = Btn("Jetzt melden", x, y, bw, false); report.Click += (a, b) => app.ReportNow();
             var support = Btn("Fernwartung", x + bw + Scale(8), y, bw, false); support.Click += (a, b) => app.StartSupport();
             Controls.Add(report); Controls.Add(support);
             y += report.Height + Scale(14);
@@ -306,7 +381,16 @@ namespace ItSolutions.Agent
 
         // Bezeichnung links (so breit wie noetig), Wert rechtsbuendig daneben. Lange Werte (Kundennamen)
         // brechen in bis zu zwei Zeilen um statt abgeschnitten zu werden.
-        int Row(string k, string v, int x, int y, int w)
+        int Section(string title, int x, int y, int w)
+        {
+            var l = Lbl(title.ToUpperInvariant(), x, y, w, 7.5f, FontStyle.Bold, Brand.Ink2);
+            Controls.Add(l);
+            return y + l.Height + Scale(2);
+        }
+
+        int Row(string k, string v, int x, int y, int w) { return Row(k, v, x, y, w, null); }
+
+        int Row(string k, string v, int x, int y, int w, Color? color)
         {
             var f = new Font("Segoe UI", 9f);
             int keyW = TextRenderer.MeasureText(k, f).Width + Scale(10);
@@ -316,7 +400,7 @@ namespace ItSolutions.Agent
             int h = TextRenderer.MeasureText(v, f, new Size(valW, 0), flags).Height;
             h = Math.Min(Math.Max(h, lineH), lineH * 2);
             Controls.Add(Lbl(k, x, y, keyW, 9f, FontStyle.Regular, Brand.Ink2));
-            var val = new Label { Text = v, Location = new Point(x + keyW, y), Size = new Size(valW, h + Scale(1)), Font = f, ForeColor = Brand.Ink,
+            var val = new Label { Text = v, Location = new Point(x + keyW, y), Size = new Size(valW, h + Scale(1)), Font = f, ForeColor = color ?? Brand.Ink,
                                   TextAlign = ContentAlignment.TopRight, AutoEllipsis = true, UseMnemonic = false };
             Controls.Add(val);
             return y + h + Scale(3);
@@ -510,6 +594,17 @@ namespace ItSolutions.Agent
             t.IsBackground = true; t.Start();
         }
 
+        public static readonly string OutboxDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "IT-Solutions-Outbox");
+
+        public void ShowProblemForm()
+        {
+            if (details != null && !details.IsDisposed) details.Close();
+            using (var f = new ProblemForm(status ?? AgentStatus.Load())) f.ShowDialog();
+        }
+
+        public static bool StartCollector() { return RunCollectorTask(); }
+
         static bool RunCollectorTask()
         {
             try
@@ -642,6 +737,112 @@ namespace ItSolutions.Agent
 
     // Symbol in allen aktiven Benutzersitzungen starten (aus dem SYSTEM-Kontext des Collectors).
     // WTSQueryUserToken braucht das TCB-Recht - das hat nur SYSTEM. Doppelte Instanzen verhindert der Mutex je Sitzung.
+    // "Problem melden": Meldung schreiben, als Datei in den Ausgangsordner legen, Collector anstossen und auf die
+    // Quittung (Ticketnummer) warten. Das Token bleibt beim Collector (SYSTEM) - das Symbol kennt es nicht.
+    class ProblemForm : Form
+    {
+        readonly AgentStatus st;
+        readonly TextBox text, phone;
+        readonly Label info;
+        readonly Button send, cancel;
+        readonly System.Windows.Forms.Timer poll = new System.Windows.Forms.Timer { Interval = 2000 };
+        string waitingFor; DateTime waitStart;
+
+        static int S(int px) { using (var g = Graphics.FromHwnd(IntPtr.Zero)) return (int)Math.Round(px * g.DpiX / 96.0); }
+
+        public ProblemForm(AgentStatus s)
+        {
+            st = s;
+            Text = "Problem melden \u2013 IT-Solutions";
+            FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = false; MinimizeBox = false;
+            StartPosition = FormStartPosition.CenterScreen; TopMost = true; ShowInTaskbar = true;
+            AutoScaleMode = AutoScaleMode.None; BackColor = Color.White; Font = new Font("Segoe UI", 9.5f);
+            int w = S(440), x = S(18), inner = w - 2 * x, y = S(16);
+            Controls.Add(new Label { Text = "Was ist passiert?", Font = new Font("Segoe UI", 11f, FontStyle.Bold), ForeColor = Brand.Ink, Location = new Point(x, y), AutoSize = true });
+            y += S(30);
+            Controls.Add(new Label { Text = "Beschreiben Sie kurz das Problem. IT-Solutions bekommt die Meldung mit Rechnername und Benutzer und meldet sich bei Ihnen.", ForeColor = Brand.Ink2, Location = new Point(x, y), Size = new Size(inner, S(38)) });
+            y += S(42);
+            text = new TextBox { Multiline = true, ScrollBars = ScrollBars.Vertical, Location = new Point(x, y), Size = new Size(inner, S(120)), MaxLength = 3500 };
+            Controls.Add(text); y += text.Height + S(10);
+            Controls.Add(new Label { Text = "R\u00fcckrufnummer (optional)", ForeColor = Brand.Ink2, Location = new Point(x, y), AutoSize = true });
+            y += S(20);
+            phone = new TextBox { Location = new Point(x, y), Size = new Size(inner, S(26)), MaxLength = 50 };
+            Controls.Add(phone); y += phone.Height + S(10);
+            info = new Label { ForeColor = Brand.Ink2, Location = new Point(x, y), Size = new Size(inner, S(40)) };
+            Controls.Add(info); y += S(44);
+            int bw = (inner - S(8)) / 2;
+            send = new Button { Text = "Senden", Location = new Point(x, y), Size = new Size(bw, S(34)), FlatStyle = FlatStyle.Flat, BackColor = Brand.Green, ForeColor = Color.White, Font = new Font("Segoe UI", 9.5f, FontStyle.Bold) };
+            send.FlatAppearance.BorderColor = Brand.Green;
+            cancel = new Button { Text = "Abbrechen", Location = new Point(x + bw + S(8), y), Size = new Size(bw, S(34)), FlatStyle = FlatStyle.Flat, DialogResult = DialogResult.Cancel };
+            cancel.FlatAppearance.BorderColor = Brand.Line;
+            Controls.Add(send); Controls.Add(cancel);
+            CancelButton = cancel;
+            ClientSize = new Size(w, y + S(34) + S(16));
+            send.Click += (a, b) => Send();
+            poll.Tick += (a, b) => CheckReceipt();
+        }
+
+        void Send()
+        {
+            var t = text.Text.Trim();
+            if (t.Length < 3) { info.ForeColor = Brand.RedDark; info.Text = "Bitte beschreiben Sie kurz das Problem."; text.Focus(); return; }
+            if (!Directory.Exists(TrayApp.OutboxDir))
+            {
+                info.ForeColor = Brand.RedDark;
+                info.Text = "Senden ist auf diesem Rechner noch nicht eingerichtet. Bitte rufen Sie an: " + st.Provider.Phone;
+                return;
+            }
+            try
+            {
+                var msg = new System.Collections.Generic.Dictionary<string, object> {
+                    { "user", Environment.UserDomainName + "\\" + Environment.UserName },
+                    { "phone", phone.Text.Trim() },
+                    { "text", t },
+                    { "createdAt", DateTime.UtcNow.ToString("o") } };
+                var name = DateTime.UtcNow.Ticks + "-" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".json";
+                File.WriteAllText(Path.Combine(TrayApp.OutboxDir, name), new JavaScriptSerializer().Serialize(msg), new System.Text.UTF8Encoding(false));
+                waitingFor = Path.Combine(TrayApp.OutboxDir, name + ".done");
+            }
+            catch (Exception ex)
+            {
+                info.ForeColor = Brand.RedDark;
+                info.Text = "Meldung konnte nicht gespeichert werden (" + ex.Message + "). Bitte rufen Sie an: " + st.Provider.Phone;
+                return;
+            }
+            send.Enabled = false; text.ReadOnly = true; phone.ReadOnly = true;
+            info.ForeColor = Brand.Ink2; info.Text = "Wird gesendet \u2026";
+            TrayApp.StartCollector();
+            waitStart = DateTime.Now; poll.Start();
+        }
+
+        void CheckReceipt()
+        {
+            if (waitingFor != null && File.Exists(waitingFor))
+            {
+                poll.Stop();
+                string r = ""; try { r = File.ReadAllText(waitingFor).Trim(); } catch { }
+                if (r.StartsWith("OK"))
+                {
+                    var no = r.Length > 3 ? r.Substring(3).Trim() : "";
+                    info.ForeColor = Brand.GreenDark;
+                    info.Text = "Danke! Ihre Meldung ist als Ticket " + no + " bei IT-Solutions angekommen. Wir melden uns.";
+                }
+                else { info.ForeColor = Brand.RedDark; info.Text = "Meldung nicht angenommen. Bitte rufen Sie an: " + st.Provider.Phone; }
+                cancel.Text = "Schlie\u00dfen";
+                return;
+            }
+            if ((DateTime.Now - waitStart).TotalSeconds > 120)
+            {
+                poll.Stop();
+                info.ForeColor = Brand.AmberDark;
+                info.Text = "Die Meldung ist gespeichert und wird gesendet, sobald die Verbindung steht (sp\u00e4testens in 10 Minuten).";
+                cancel.Text = "Schlie\u00dfen";
+            }
+        }
+
+        protected override void OnFormClosed(FormClosedEventArgs e) { poll.Stop(); base.OnFormClosed(e); }
+    }
+
     static class SessionLauncher
     {
         [StructLayout(LayoutKind.Sequential)]

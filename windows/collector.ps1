@@ -1,5 +1,5 @@
 # IT-Solutions Asset-Collector
-# collector-version: 14
+# collector-version: 15
 # Infrastruktur-Scan (nur lesend) -> POST an das CRM. Zusaetzlich fuehrt er die FESTEN Befehle
 # windows-update, winget-upgrade, rescan und reboot aus, wenn das CRM sie fuer dieses Geraet
 # freigegeben hat (Opt-in) und der Nutzer sie ausgeloest hat. Kein freies Skript, kein Fernzugriff.
@@ -21,7 +21,7 @@ $ErrorActionPreference = "Stop"
 # TLS 1.2 erzwingen (Windows PowerShell 5.1 nutzt sonst veraltetes TLS).
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$CollectorVersion = 14
+$CollectorVersion = 15
 $SigningKeyXml = '<RSAKeyValue><Modulus>uAxspiYovBEcA7viyD9y1pDu+gw4n/ASAGAgLZHCURTOYeD6Az/Udz8JavYAf7SQmISWfe28nVhzskliDyYyy23RiS9NpEnS0tqMXBNr+tKz29N4wOhTdyhqsIyAulxN9rK+VA+WyF9lNBmTI94OvUJ3qeebgrJpHThdVILVVhqQVwUjTJvq2ZQDoCZcofdGYVWowBRyCewoW9KMnDsoEGXy/1/nuxKRB4GicQMo4P5+HMWbNQFf+c5n+qGKE3N4TdPUHQOE38i25y5zgJ8e88Olqhla2cKfhU5wwJhZ5JgvR/R6BSt0QAxdXmkOLtfjH8SWIyHLdaUXRQyWPo4cb2bDaUsEbL3R7IapkqejvGwQJMsamoGU9xVUP0+Cj/UlpVYWQ1wSmFnIZS02LG7bpAIfkeUEhc/3/iu2nJ/PV2dROIHZ1rlxNBwcmWb0QnaYEYHd1IGHdVCMBpx2ggmgChphkbhhaGd3r84ZRt3SmIefwmx025R/CgSX/6Fvsqih</Modulus><Exponent>AQAB</Exponent></RSAKeyValue>'
 
 $cfgPath = Join-Path $PSScriptRoot "agent-config.json"
@@ -383,6 +383,71 @@ function Install-Tray {
   return $result
 }
 
+# TeamViewer-ID und -Version (64- oder 32-Bit-Installation).
+function Get-TeamViewerInfo {
+  foreach ($k in 'HKLM:\SOFTWARE\TeamViewer', 'HKLM:\SOFTWARE\WOW6432Node\TeamViewer') {
+    $p = Get-ItemProperty -Path $k -ErrorAction SilentlyContinue
+    if ($p -and $p.ClientID) { return [pscustomobject]@{ id = [string]$p.ClientID; version = ([string]$p.Version).Trim() } }
+  }
+  return $null
+}
+
+# "Problem melden" aus dem Symbol: Das Tray-Programm legt Meldungen als JSON in diesen Ordner (Benutzer duerfen
+# schreiben, nicht aendern); der Collector sendet sie mit dem Geraete-Token als Ticket ans CRM und legt eine
+# Quittung "<datei>.done" mit der Ticketnummer ab, die das Symbol anzeigt.
+$OutboxDir = Join-Path $env:ProgramData "IT-Solutions-Outbox"
+function Initialize-Outbox {
+  if (Test-Path $OutboxDir) { return }
+  New-Item -ItemType Directory -Force -Path $OutboxDir | Out-Null
+  $acl = New-Object System.Security.AccessControl.DirectorySecurity
+  $acl.SetAccessRuleProtection($true, $false)
+  $inh = "ContainerInherit,ObjectInherit"
+  $rules = @(
+    @("S-1-5-18", [System.Security.AccessControl.FileSystemRights]::FullControl),
+    @("S-1-5-32-544", [System.Security.AccessControl.FileSystemRights]::FullControl),
+    @("S-1-5-32-545", [System.Security.AccessControl.FileSystemRights]"ReadAndExecute, Write")
+  )
+  foreach ($r in $rules) {
+    $sid = New-Object System.Security.Principal.SecurityIdentifier($r[0])
+    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($sid, $r[1], $inh, "None", "Allow")))
+  }
+  Set-Acl -Path $OutboxDir -AclObject $acl
+}
+
+function Send-Outbox {
+  Initialize-Outbox
+  $api = $cfg.reportUrl -replace '/report$', '/ticket'
+  Get-ChildItem -Path $OutboxDir -Filter "*.done" -ErrorAction SilentlyContinue |
+    Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-1) } | Remove-Item -Force -ErrorAction SilentlyContinue
+  $files = @(Get-ChildItem -Path $OutboxDir -Filter "*.json" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -First 5)
+  foreach ($f in $files) {
+    $done = $f.FullName + ".done"
+    if ($f.Length -gt 16384 -or $f.LastWriteTime -lt (Get-Date).AddDays(-3)) {
+      Set-Content -Path $done -Value "FEHLER: Meldung zu gross oder zu alt" -Encoding UTF8; Remove-Item $f.FullName -Force; continue
+    }
+    try { $msg = Get-Content $f.FullName -Raw -Encoding UTF8 | ConvertFrom-Json } catch {
+      Set-Content -Path $done -Value "FEHLER: Meldung nicht lesbar" -Encoding UTF8; Remove-Item $f.FullName -Force; continue
+    }
+    $body = [pscustomobject]@{
+      hostname = $env:COMPUTERNAME; user = [string]$msg.user; phone = [string]$msg.phone; text = [string]$msg.text; createdAt = [string]$msg.createdAt
+    } | ConvertTo-Json -Compress
+    try {
+      $r = Invoke-RestMethod -Method Post -Uri $api -Headers @{ Authorization = "Bearer $($cfg.token)" } `
+        -ContentType "application/json; charset=utf-8" -Body ([System.Text.Encoding]::UTF8.GetBytes($body)) -TimeoutSec 30
+      Set-Content -Path $done -Value ("OK " + $r.ticketNo) -Encoding UTF8
+      Remove-Item $f.FullName -Force
+    } catch {
+      $code = 0
+      try { $code = [int]$_.Exception.Response.StatusCode } catch {}
+      if ($code -ge 400 -and $code -lt 500 -and $code -ne 429) {
+        Set-Content -Path $done -Value ("FEHLER: vom Server abgelehnt (" + $code + ")") -Encoding UTF8
+        Remove-Item $f.FullName -Force
+      }
+      # Netzwerkfehler/429: Datei bleibt liegen, naechster Lauf versucht es erneut
+    }
+  }
+}
+
 # Statusdatei fuer das Tray-Programm: liegt AUSSERHALB des geschuetzten Installationsordners, enthaelt kein Token.
 # Lesen: alle Benutzer; Schreiben: nur SYSTEM und Administratoren.
 $StatusDir = Join-Path $env:ProgramData "IT-Solutions-Status"
@@ -417,12 +482,24 @@ function Write-AgentStatus($result, $message, $resp) {
     lastMessage   = $message
     lastSuccessAt = $(if ($result -eq "ok") { $now } elseif ($old) { $old.lastSuccessAt } else { $null })
     customerName  = $(if ($resp -and $resp.customerName) { [string]$resp.customerName } elseif ($old) { $old.customerName } else { $null })
+    teamviewerId  = $(if ($tvInfo) { $tvInfo.id } else { $null })
+    manufacturer  = $(if ($hardware) { $hardware.manufacturer } else { $null })
+    model         = $(if ($hardware) { $hardware.model } else { $null })
+    serial        = $(if ($hardware) { $hardware.serial } else { $null })
+    domain        = $(if ($hardware -and $hardware.partOfDomain) { $hardware.domain } else { $null })
+    osName        = $(if ($os) { [string]$os.Caption } else { $null })
+    osProduct     = $(if ($resp) { if ($resp.os) { [string]$resp.os.product } else { $null } } elseif ($old) { $old.osProduct } else { $null })
+    osSupportEnd  = $(if ($resp) { if ($resp.os) { [string]$resp.os.supportEnd } else { $null } } elseif ($old) { $old.osSupportEnd } else { $null })
+    contractNo    = $(if ($resp) { if ($resp.contract) { [string]$resp.contract.no } else { $null } } elseif ($old) { $old.contractNo } else { $null })
+    lastPatchAt   = $(if ($updInfo -and $updInfo.lastInstalled) { [string]$updInfo.lastInstalled } elseif ($old) { $old.lastPatchAt } else { $null })
     provider      = $(if ($resp -and $resp.provider) { $resp.provider } elseif ($old) { $old.provider } else { $null })
   }
   $tmp = "$file.tmp"
   [System.IO.File]::WriteAllText($tmp, ($st | ConvertTo-Json -Depth 4), (New-Object System.Text.UTF8Encoding($false)))
   Move-Item -Force -Path $tmp -Destination $file
 }
+
+if (-not $DryRun) { Safe { Send-Outbox } }
 
 # --- Poll-Modus (-Poll): Befehle abholen, ausfuehren, Ergebnis melden ---------------
 if ($Poll) {
@@ -762,6 +839,7 @@ $network = Timed "network" {
 
 # Abhol-Task fuer Fernbefehle sicherstellen (best-effort).
 $trayState = $null
+$tvInfo = Safe { Get-TeamViewerInfo } $null
 if (-not $DryRun) { Safe { Register-PollTask }; Safe { Set-MainTaskInterval }; Safe { Set-TaskUserRunnable }; $trayState = Safe { Install-Tray } "Fehler" }
 
 $payload = [pscustomobject]@{
@@ -795,6 +873,7 @@ $payload = [pscustomobject]@{
   backup           = $backup
   network          = @($network | Where-Object { $_ -ne $null })
   tray             = $trayState
+  teamviewer       = $tvInfo
 } | ConvertTo-Json -Depth 7 -Compress
 
 if ($DryRun) {
