@@ -28,8 +28,8 @@ using Microsoft.Win32;
 [assembly: AssemblyProduct("IT-Solutions Agent")]
 [assembly: AssemblyCompany("IT-Solutions by Stefan Regenfelder")]
 [assembly: AssemblyCopyright("(c) 2026 Stefan Regenfelder, Villach - MIT-Lizenz")]
-[assembly: AssemblyVersion("1.6.0.0")]
-[assembly: AssemblyFileVersion("1.6.0.0")]
+[assembly: AssemblyVersion("1.7.0.0")]
+[assembly: AssemblyFileVersion("1.7.0.0")]
 
 namespace ItSolutions.Agent
 {
@@ -54,6 +54,8 @@ namespace ItSolutions.Agent
         public DateTime? LastRunAt, LastSuccessAt, OsSupportEnd, LastPatchAt;
         public Provider Provider = new Provider();
         public bool Present;
+        /** "Problem melden" fuer diesen Kunden freigeschaltet (Standard: nur mit Wartungsvertrag) */
+        public bool TicketsEnabled;
 
         public static readonly string FilePath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "IT-Solutions-Status", "status.json");
@@ -93,6 +95,7 @@ namespace ItSolutions.Agent
                 s.OsSupportEnd = Date(d, "osSupportEnd");
                 s.ContractNo = Str(d, "contractNo");
                 s.LastPatchAt = Date(d, "lastPatchAt");
+                object te; s.TicketsEnabled = d.TryGetValue("ticketsEnabled", out te) && te is bool && (bool)te;
                 var p = d.ContainsKey("provider") ? d["provider"] as System.Collections.Generic.Dictionary<string, object> : null;
                 if (p != null)
                 {
@@ -346,11 +349,14 @@ namespace ItSolutions.Agent
             }
             y += Scale(10);
 
-            var problem = Btn("Problem melden", x, y, inner, true); problem.Click += (a, b) => app.ShowProblemForm();
-            Controls.Add(problem);
-            y += problem.Height + Scale(8);
+            if (s.TicketsEnabled)
+            {
+                var problem = Btn("Problem melden", x, y, inner, true); problem.Click += (a, b) => app.ShowProblemForm();
+                Controls.Add(problem);
+                y += problem.Height + Scale(8);
+            }
             int bw = (inner - Scale(8)) / 2;
-            var report = Btn("Jetzt melden", x, y, bw, false); report.Click += (a, b) => app.ReportNow();
+            var report = Btn("Jetzt melden", x, y, bw, !s.TicketsEnabled); report.Click += (a, b) => app.ReportNow();
             var support = Btn("Fernwartung", x + bw + Scale(8), y, bw, false); support.Click += (a, b) => app.StartSupport();
             Controls.Add(report); Controls.Add(support);
             y += report.Height + Scale(14);

@@ -1,5 +1,5 @@
 # IT-Solutions Asset-Collector
-# collector-version: 15
+# collector-version: 16
 # Infrastruktur-Scan (nur lesend) -> POST an das CRM. Zusaetzlich fuehrt er die FESTEN Befehle
 # windows-update, winget-upgrade, rescan und reboot aus, wenn das CRM sie fuer dieses Geraet
 # freigegeben hat (Opt-in) und der Nutzer sie ausgeloest hat. Kein freies Skript, kein Fernzugriff.
@@ -21,7 +21,7 @@ $ErrorActionPreference = "Stop"
 # TLS 1.2 erzwingen (Windows PowerShell 5.1 nutzt sonst veraltetes TLS).
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$CollectorVersion = 15
+$CollectorVersion = 16
 $SigningKeyXml = '<RSAKeyValue><Modulus>uAxspiYovBEcA7viyD9y1pDu+gw4n/ASAGAgLZHCURTOYeD6Az/Udz8JavYAf7SQmISWfe28nVhzskliDyYyy23RiS9NpEnS0tqMXBNr+tKz29N4wOhTdyhqsIyAulxN9rK+VA+WyF9lNBmTI94OvUJ3qeebgrJpHThdVILVVhqQVwUjTJvq2ZQDoCZcofdGYVWowBRyCewoW9KMnDsoEGXy/1/nuxKRB4GicQMo4P5+HMWbNQFf+c5n+qGKE3N4TdPUHQOE38i25y5zgJ8e88Olqhla2cKfhU5wwJhZ5JgvR/R6BSt0QAxdXmkOLtfjH8SWIyHLdaUXRQyWPo4cb2bDaUsEbL3R7IapkqejvGwQJMsamoGU9xVUP0+Cj/UlpVYWQ1wSmFnIZS02LG7bpAIfkeUEhc/3/iu2nJ/PV2dROIHZ1rlxNBwcmWb0QnaYEYHd1IGHdVCMBpx2ggmgChphkbhhaGd3r84ZRt3SmIefwmx025R/CgSX/6Fvsqih</Modulus><Exponent>AQAB</Exponent></RSAKeyValue>'
 
 $cfgPath = Join-Path $PSScriptRoot "agent-config.json"
@@ -491,6 +491,7 @@ function Write-AgentStatus($result, $message, $resp) {
     osProduct     = $(if ($resp) { if ($resp.os) { [string]$resp.os.product } else { $null } } elseif ($old) { $old.osProduct } else { $null })
     osSupportEnd  = $(if ($resp) { if ($resp.os) { [string]$resp.os.supportEnd } else { $null } } elseif ($old) { $old.osSupportEnd } else { $null })
     contractNo    = $(if ($resp) { if ($resp.contract) { [string]$resp.contract.no } else { $null } } elseif ($old) { $old.contractNo } else { $null })
+    ticketsEnabled = $(if ($resp) { [bool]$resp.ticketsEnabled } elseif ($old) { [bool]$old.ticketsEnabled } else { $false })
     lastPatchAt   = $(if ($updInfo -and $updInfo.lastInstalled) { [string]$updInfo.lastInstalled } elseif ($old) { $old.lastPatchAt } else { $null })
     provider      = $(if ($resp -and $resp.provider) { $resp.provider } elseif ($old) { $old.provider } else { $null })
   }
