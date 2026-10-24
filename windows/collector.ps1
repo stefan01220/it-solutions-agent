@@ -1,5 +1,5 @@
 # IT-Solutions Asset-Collector
-# collector-version: 16
+# collector-version: 17
 # Infrastruktur-Scan (nur lesend) -> POST an das CRM. Zusaetzlich fuehrt er die FESTEN Befehle
 # windows-update, winget-upgrade, rescan und reboot aus, wenn das CRM sie fuer dieses Geraet
 # freigegeben hat (Opt-in) und der Nutzer sie ausgeloest hat. Kein freies Skript, kein Fernzugriff.
@@ -21,7 +21,7 @@ $ErrorActionPreference = "Stop"
 # TLS 1.2 erzwingen (Windows PowerShell 5.1 nutzt sonst veraltetes TLS).
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$CollectorVersion = 16
+$CollectorVersion = 17
 $SigningKeyXml = '<RSAKeyValue><Modulus>uAxspiYovBEcA7viyD9y1pDu+gw4n/ASAGAgLZHCURTOYeD6Az/Udz8JavYAf7SQmISWfe28nVhzskliDyYyy23RiS9NpEnS0tqMXBNr+tKz29N4wOhTdyhqsIyAulxN9rK+VA+WyF9lNBmTI94OvUJ3qeebgrJpHThdVILVVhqQVwUjTJvq2ZQDoCZcofdGYVWowBRyCewoW9KMnDsoEGXy/1/nuxKRB4GicQMo4P5+HMWbNQFf+c5n+qGKE3N4TdPUHQOE38i25y5zgJ8e88Olqhla2cKfhU5wwJhZ5JgvR/R6BSt0QAxdXmkOLtfjH8SWIyHLdaUXRQyWPo4cb2bDaUsEbL3R7IapkqejvGwQJMsamoGU9xVUP0+Cj/UlpVYWQ1wSmFnIZS02LG7bpAIfkeUEhc/3/iu2nJ/PV2dROIHZ1rlxNBwcmWb0QnaYEYHd1IGHdVCMBpx2ggmgChphkbhhaGd3r84ZRt3SmIefwmx025R/CgSX/6Fvsqih</Modulus><Exponent>AQAB</Exponent></RSAKeyValue>'
 
 $cfgPath = Join-Path $PSScriptRoot "agent-config.json"
@@ -217,7 +217,26 @@ function Get-CommandRefusal($command, $p) {
 }
 
 # $whatIf = $true: nur auflisten, was installiert wuerde (fuer lokale Tests, wird vom CRM nie gesetzt).
-function Invoke-WindowsUpdateInstall($whatIf = $false) {
+# Windows-Update-Befehl: Ist der Dienst deaktiviert, wird er nur mit ausdruecklicher Freigabe im Befehl
+# (params.enableService = true, im CRM bestaetigt) auf "Manuell" gestellt - sonst Abbruch mit Hinweis.
+function Invoke-WindowsUpdateInstall($whatIf = $false, $p = $null) {
+  $note = ""
+  $svc = Get-Service -Name wuauserv -ErrorAction SilentlyContinue
+  if ($svc -and [string]$svc.StartType -eq "Disabled") {
+    if (-not $whatIf -and $p -and $p.enableService -eq $true) {
+      Set-Service -Name wuauserv -StartupType Manual
+      Start-Service -Name wuauserv -ErrorAction SilentlyContinue
+      $note = "Windows-Update-Dienst war deaktiviert und steht jetzt auf Manuell. "
+    } else {
+      return New-CmdResult "failed" "Der Windows-Update-Dienst ist deaktiviert (Freigabe zum Einschalten fehlt)." $null
+    }
+  }
+  $r = Invoke-WindowsUpdateCore $whatIf
+  if ($note -and $r) { $r.summary = $note + $r.summary }
+  return $r
+}
+
+function Invoke-WindowsUpdateCore($whatIf = $false) {
   $session  = New-Object -ComObject Microsoft.Update.Session
   $searcher = $session.CreateUpdateSearcher()
   $found = $searcher.Search("IsInstalled=0 and IsHidden=0 and Type='Software'").Updates
@@ -281,7 +300,7 @@ function Invoke-AgentCommand($command, $p) {
   if ($why) { return New-CmdResult "refused" $why $null }
   switch ($command) {
     'rescan' { return New-CmdResult "done" "Neu eingelesen." $null }   # der Bericht folgt direkt nach dem Befehl
-    'windows-update' { return Invoke-WindowsUpdateInstall }
+    'windows-update' { return Invoke-WindowsUpdateInstall $false $p }
     'winget-upgrade' { return Invoke-WingetUpgradeAll }
     'reboot' {
       & shutdown.exe /r /t 300 /c "Neustart durch IT-Solutions (Wartung) in 5 Minuten. Abbrechen: shutdown /a"
