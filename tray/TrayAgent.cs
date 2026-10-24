@@ -28,8 +28,8 @@ using Microsoft.Win32;
 [assembly: AssemblyProduct("IT-Solutions Agent")]
 [assembly: AssemblyCompany("IT-Solutions by Stefan Regenfelder")]
 [assembly: AssemblyCopyright("(c) 2026 Stefan Regenfelder, Villach - MIT-Lizenz")]
-[assembly: AssemblyVersion("1.8.0.0")]
-[assembly: AssemblyFileVersion("1.8.0.0")]
+[assembly: AssemblyVersion("1.9.0.0")]
+[assembly: AssemblyFileVersion("1.9.0.0")]
 
 namespace ItSolutions.Agent
 {
@@ -279,7 +279,7 @@ namespace ItSolutions.Agent
             tips.SetToolTip(logo, "Auf Updates prüfen");
             logo.Click += (a, b) => app.CheckForUpdatesNow(this);
             Controls.Add(logo);
-            var verText = (s.AgentVersion > 0 ? "v" + s.AgentVersion : "v–") + " · " + TrayApp.RunningVersionText;
+            var verText = s.AgentVersion > 0 ? "v" + s.AgentVersion : "v–";
             var verFont = new Font("Segoe UI", 8f);
             int verW = TextRenderer.MeasureText(verText, verFont).Width + Scale(4);
             var ver = new Label { Text = verText, Font = verFont, ForeColor = Brand.Ink2, Location = new Point(x + inner - verW, y), Size = new Size(verW, TextH(verFont) + Scale(1)), TextAlign = ContentAlignment.TopRight };
@@ -596,7 +596,7 @@ namespace ItSolutions.Agent
                                 : "Update vorhanden, Start nicht möglich – kommt beim nächsten Lauf";
                             kind = started ? 0 : 2;
                         }
-                        else { msg = "Alles aktuell: Skript v" + st.AgentVersion + " · Symbol " + RunningVersionText; kind = 1; }
+                        else { msg = "Alles aktuell (v" + st.AgentVersion + ")"; kind = 1; }
                     }
                 }
                 catch (Exception ex) { msg = "Prüfung nicht möglich: " + ex.Message; kind = 2; }
