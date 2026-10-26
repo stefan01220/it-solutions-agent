@@ -28,8 +28,8 @@ using Microsoft.Win32;
 [assembly: AssemblyProduct("IT-Solutions Agent")]
 [assembly: AssemblyCompany("IT-Solutions by Stefan Regenfelder")]
 [assembly: AssemblyCopyright("(c) 2026 Stefan Regenfelder, Villach - MIT-Lizenz")]
-[assembly: AssemblyVersion("1.9.0.0")]
-[assembly: AssemblyFileVersion("1.9.0.0")]
+[assembly: AssemblyVersion("1.10.0.0")]
+[assembly: AssemblyFileVersion("1.10.0.0")]
 
 namespace ItSolutions.Agent
 {
@@ -880,30 +880,46 @@ namespace ItSolutions.Agent
         static extern bool CreateProcessAsUser(IntPtr token, string app, string cmd, IntPtr pa, IntPtr ta, bool inherit, uint flags, IntPtr env, string dir, ref STARTUPINFO si, out PROCESS_INFORMATION pi);
         [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
 
+        // Protokoll fuer die Fehlersuche (SYSTEM schreibt, Benutzer duerfen lesen; wird klein gehalten).
+        static void Log(string msg)
+        {
+            try
+            {
+                var f = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "IT-Solutions-Status", "launcher.log");
+                if (File.Exists(f) && new FileInfo(f).Length > 64 * 1024) File.Delete(f);
+                File.AppendAllText(f, DateTime.Now.ToString("s") + " " + msg + Environment.NewLine);
+            }
+            catch { }
+        }
+
         public static int StartInAllSessions()
         {
             string exe = Assembly.GetExecutingAssembly().Location;
             IntPtr info; int count; int started = 0;
-            if (!WTSEnumerateSessions(IntPtr.Zero, 0, 1, out info, out count)) return -1;
+            Log("Start als " + WindowsIdentity.GetCurrent().Name + ", exe " + exe);
+            if (!WTSEnumerateSessions(IntPtr.Zero, 0, 1, out info, out count)) { Log("WTSEnumerateSessions Fehler " + Marshal.GetLastWin32Error()); return -1; }
             try
             {
                 int size = Marshal.SizeOf(typeof(WTS_SESSION_INFO));
                 for (int i = 0; i < count; i++)
                 {
                     var si = (WTS_SESSION_INFO)Marshal.PtrToStructure(new IntPtr(info.ToInt64() + i * size), typeof(WTS_SESSION_INFO));
+                    Log("Sitzung " + si.SessionId + " Zustand " + si.State);
                     if (si.State != 0 /* WTSActive */ || si.SessionId == 0) continue;
                     IntPtr user, primary = IntPtr.Zero, env = IntPtr.Zero;
-                    if (!WTSQueryUserToken(si.SessionId, out user)) continue;
+                    if (!WTSQueryUserToken(si.SessionId, out user)) { Log("  WTSQueryUserToken Fehler " + Marshal.GetLastWin32Error()); continue; }
                     try
                     {
-                        if (!DuplicateTokenEx(user, 0x02000000 /* MAXIMUM_ALLOWED */, IntPtr.Zero, 2 /* Impersonation */, 1 /* Primary */, out primary)) continue;
+                        if (!DuplicateTokenEx(user, 0x02000000 /* MAXIMUM_ALLOWED */, IntPtr.Zero, 2 /* Impersonation */, 1 /* Primary */, out primary)) { Log("  DuplicateTokenEx Fehler " + Marshal.GetLastWin32Error()); continue; }
                         CreateEnvironmentBlock(out env, primary, false);
                         var st = new STARTUPINFO(); st.cb = Marshal.SizeOf(typeof(STARTUPINFO)); st.lpDesktop = "winsta0\\default";
                         PROCESS_INFORMATION pi;
                         if (CreateProcessAsUser(primary, exe, "\"" + exe + "\"", IntPtr.Zero, IntPtr.Zero, false, 0x00000400 /* CREATE_UNICODE_ENVIRONMENT */, env, Path.GetDirectoryName(exe), ref st, out pi))
                         {
                             started++; CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+                            Log("  gestartet, PID " + pi.dwProcessId);
                         }
+                        else Log("  CreateProcessAsUser Fehler " + Marshal.GetLastWin32Error());
                     }
                     finally
                     {
@@ -914,6 +930,7 @@ namespace ItSolutions.Agent
                 }
             }
             finally { WTSFreeMemory(info); }
+            Log("Ende: " + started + " gestartet");
             return started;
         }
     }
