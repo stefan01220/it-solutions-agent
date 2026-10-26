@@ -1,5 +1,5 @@
 # IT-Solutions Asset-Collector
-# collector-version: 17
+# collector-version: 18
 # Infrastruktur-Scan (nur lesend) -> POST an das CRM. Zusaetzlich fuehrt er die FESTEN Befehle
 # windows-update, winget-upgrade, rescan und reboot aus, wenn das CRM sie fuer dieses Geraet
 # freigegeben hat (Opt-in) und der Nutzer sie ausgeloest hat. Kein freies Skript, kein Fernzugriff.
@@ -21,7 +21,7 @@ $ErrorActionPreference = "Stop"
 # TLS 1.2 erzwingen (Windows PowerShell 5.1 nutzt sonst veraltetes TLS).
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$CollectorVersion = 17
+$CollectorVersion = 18
 $SigningKeyXml = '<RSAKeyValue><Modulus>uAxspiYovBEcA7viyD9y1pDu+gw4n/ASAGAgLZHCURTOYeD6Az/Udz8JavYAf7SQmISWfe28nVhzskliDyYyy23RiS9NpEnS0tqMXBNr+tKz29N4wOhTdyhqsIyAulxN9rK+VA+WyF9lNBmTI94OvUJ3qeebgrJpHThdVILVVhqQVwUjTJvq2ZQDoCZcofdGYVWowBRyCewoW9KMnDsoEGXy/1/nuxKRB4GicQMo4P5+HMWbNQFf+c5n+qGKE3N4TdPUHQOE38i25y5zgJ8e88Olqhla2cKfhU5wwJhZ5JgvR/R6BSt0QAxdXmkOLtfjH8SWIyHLdaUXRQyWPo4cb2bDaUsEbL3R7IapkqejvGwQJMsamoGU9xVUP0+Cj/UlpVYWQ1wSmFnIZS02LG7bpAIfkeUEhc/3/iu2nJ/PV2dROIHZ1rlxNBwcmWb0QnaYEYHd1IGHdVCMBpx2ggmgChphkbhhaGd3r84ZRt3SmIefwmx025R/CgSX/6Fvsqih</Modulus><Exponent>AQAB</Exponent></RSAKeyValue>'
 
 $cfgPath = Join-Path $PSScriptRoot "agent-config.json"
@@ -352,11 +352,45 @@ function Set-TaskUserRunnable($taskName = "IT-Solutions Asset-Collector") {
 
 # Tray-Programm (Symbol im Infobereich) installieren bzw. aktualisieren - nur mit gueltiger Signatur.
 # Abschaltbar je Geraet mit "tray": false in agent-config.json. Server Core (kein explorer.exe) wird uebersprungen.
+# Symbol in den angemeldeten Sitzungen starten. Der Collector laeuft in einem Job-Objekt der Aufgabenplanung
+# ohne Breakaway; Prozesse daraus duerfen nicht in fremden Sitzungen starten (CreateProcessAsUser: Fehler 5).
+# Darum eine eigene Aufgabe mit der Gruppe "Benutzer" als Prinzipal: Beim Start fuehrt Windows sie in jeder
+# angemeldeten Sitzung als der jeweilige Benutzer aus, ausserdem bei jeder Anmeldung.
+$TrayTaskName = "IT-Solutions Agent Tray"
+function Register-TrayTask($exe) {
+  $existing = Get-ScheduledTask -TaskName $TrayTaskName -ErrorAction SilentlyContinue
+  if ($existing -and $existing.Actions[0].Execute -eq $exe) { return }
+  $action = New-ScheduledTaskAction -Execute $exe
+  $trigger = New-ScheduledTaskTrigger -AtLogOn
+  $principal = New-ScheduledTaskPrincipal -GroupId "S-1-5-32-545" -RunLevel Limited
+  $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -DontStopOnIdleEnd `
+    -MultipleInstances Parallel -ExecutionTimeLimit ([TimeSpan]::Zero) -Priority 5
+  Unregister-ScheduledTask -TaskName $TrayTaskName -Confirm:$false -ErrorAction SilentlyContinue
+  Register-ScheduledTask -TaskName $TrayTaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings `
+    -Description "IT-Solutions Agent - Symbol im Infobereich fuer angemeldete Benutzer" | Out-Null
+}
+
+# Sitzungen mit Desktop, aber ohne Symbol.
+function Get-SessionsWithoutTray {
+  $desk = @(Get-Process -Name explorer -ErrorAction SilentlyContinue | Select-Object -ExpandProperty SessionId -Unique)
+  $tray = @(Get-Process -Name IT-Solutions-Agent -ErrorAction SilentlyContinue | Select-Object -ExpandProperty SessionId -Unique)
+  return @($desk | Where-Object { $_ -ne 0 -and $tray -notcontains $_ })
+}
+
+function Start-TrayInSessions {
+  $before = @(Get-SessionsWithoutTray).Count
+  if ($before -eq 0) { return 0 }
+  Start-ScheduledTask -TaskName $TrayTaskName
+  Start-Sleep -Seconds 5
+  return $before - @(Get-SessionsWithoutTray).Count
+}
+
 function Install-Tray {
   $runKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
   $runName = "IT-Solutions Agent"
   if ($cfg.PSObject.Properties["tray"] -and $cfg.tray -eq $false) {
     Remove-ItemProperty -Path $runKey -Name $runName -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName $TrayTaskName -Confirm:$false -ErrorAction SilentlyContinue
     return "abgeschaltet"
   }
   if (-not (Test-Path (Join-Path $env:windir "explorer.exe"))) { return "kein Desktop" }
@@ -383,22 +417,13 @@ function Install-Tray {
     [System.IO.File]::WriteAllBytes($exe, $bytes)
     Set-Content -Path $sigLocal -Value $sigText -Encoding ASCII
     $result = "installiert"
-    # Als SYSTEM: Symbol gleich in allen angemeldeten Sitzungen starten (sonst erst bei der naechsten Anmeldung).
-    if ([System.Security.Principal.WindowsIdentity]::GetCurrent().IsSystem) {
-      try { $p = Start-Process -FilePath $exe -ArgumentList "--start-sessions" -PassThru -Wait -WindowStyle Hidden; $result = "installiert, in $($p.ExitCode) Sitzung(en) gestartet" } catch {}
-    }
   }
-  $want = '"' + $exe + '"'
-  $cur = (Get-ItemProperty -Path $runKey -Name $runName -ErrorAction SilentlyContinue).$runName
-  if ($cur -ne $want) { New-ItemProperty -Path $runKey -Name $runName -Value $want -PropertyType String -Force | Out-Null }
-  # Offene Sitzungen ohne Symbol (z.B. Installation per Gruppenrichtlinie, Symbol beendet): nachstarten.
-  if ($result -eq "aktuell" -and [System.Security.Principal.WindowsIdentity]::GetCurrent().IsSystem) {
-    $desk = @(Get-Process -Name explorer -ErrorAction SilentlyContinue | Select-Object -ExpandProperty SessionId -Unique)
-    $tray = @(Get-Process -Name IT-Solutions-Agent -ErrorAction SilentlyContinue | Select-Object -ExpandProperty SessionId -Unique)
-    if (@($desk | Where-Object { $_ -ne 0 -and $tray -notcontains $_ }).Count -gt 0) {
-      try { $p = Start-Process -FilePath $exe -ArgumentList "--start-sessions" -PassThru -Wait -WindowStyle Hidden; $result = "aktuell, in $($p.ExitCode) Sitzung(en) nachgestartet" } catch {}
-    }
-  }
+  # Die Anmelde-Aufgabe ersetzt den Run-Schluessel (beide zugleich wuerden das Symbol doppelt anstossen);
+  # scheitert die Aufgabe, bleibt der Schluessel stehen.
+  Register-TrayTask $exe
+  Remove-ItemProperty -Path $runKey -Name $runName -ErrorAction SilentlyContinue
+  # Offene Sitzungen ohne Symbol (neue Installation, Gruppenrichtlinie, Symbol beendet): gleich starten.
+  try { $n = Start-TrayInSessions; if ($n -gt 0) { $result = "$result, in $n Sitzung(en) gestartet" } } catch {}
   return $result
 }
 
