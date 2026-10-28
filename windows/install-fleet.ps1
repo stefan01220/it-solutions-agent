@@ -65,10 +65,10 @@ foreach ($c in $all) {
   if (-not $isSelf) { $reach = [bool](Test-WSMan -ComputerName $name -ErrorAction SilentlyContinue) }
   $installed = $false
   if ($isSelf) {
-    $installed = Test-Path "C:\ProgramData\IT-Solutions\collector.ps1"     # lokal pruefen, kein WinRM noetig
+    $installed = (Test-Path "C:\ProgramData\IT-Solutions\Agent\collector.ps1") -or (Test-Path "C:\ProgramData\IT-Solutions\collector.ps1")     # lokal pruefen, kein WinRM noetig (Agent\ ab v19, davor direkt)
   } elseif ($reach) {
     try {
-      $installed = [bool](Invoke-Command -ComputerName $name -ScriptBlock { Test-Path "C:\ProgramData\IT-Solutions\collector.ps1" } -ErrorAction Stop)
+      $installed = [bool](Invoke-Command -ComputerName $name -ScriptBlock { (Test-Path "C:\ProgramData\IT-Solutions\Agent\collector.ps1") -or (Test-Path "C:\ProgramData\IT-Solutions\collector.ps1") } -ErrorAction Stop)
     } catch { $reach = $false }
   }
   $rows += [pscustomobject]@{

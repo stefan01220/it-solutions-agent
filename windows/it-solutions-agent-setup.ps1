@@ -3,7 +3,8 @@
 # Einmal pro Kundenrechner ALS ADMINISTRATOR ausfuehren (Windows PowerShell 5.1 oder neuer).
 # Richtet alles selbst ein:
 #   1. Enrollment beim CRM  -> Agent-Token   (Kundennummer + kurzlebiger Installationscode)
-#   2. Collector + Config nach C:\ProgramData\IT-Solutions\   (Signatur wird vorher geprueft)
+#   2. Collector + Config nach C:\ProgramData\IT-Solutions\Agent\   (Signatur wird vorher geprueft)
+#      Nur der Unterordner Agent wird auf SYSTEM + Administratoren beschraenkt; der Elternordner bleibt unberuehrt.
 #   3. Scheduled Task (SYSTEM, alle 2 h, ueberlebt Reboot)
 #   4. Erster Scan sofort - und Kontrolle, dass der Bericht im CRM angekommen ist
 #
@@ -25,7 +26,7 @@ $ErrorActionPreference = "Stop"
 $CrmBase     = "https://managed.it-villach.at"
 # Oeffentlicher Schluessel zur Pruefung der Collector-Signatur (identisch mit dem im Collector).
 $SigningKeyXml = '<RSAKeyValue><Modulus>uAxspiYovBEcA7viyD9y1pDu+gw4n/ASAGAgLZHCURTOYeD6Az/Udz8JavYAf7SQmISWfe28nVhzskliDyYyy23RiS9NpEnS0tqMXBNr+tKz29N4wOhTdyhqsIyAulxN9rK+VA+WyF9lNBmTI94OvUJ3qeebgrJpHThdVILVVhqQVwUjTJvq2ZQDoCZcofdGYVWowBRyCewoW9KMnDsoEGXy/1/nuxKRB4GicQMo4P5+HMWbNQFf+c5n+qGKE3N4TdPUHQOE38i25y5zgJ8e88Olqhla2cKfhU5wwJhZ5JgvR/R6BSt0QAxdXmkOLtfjH8SWIyHLdaUXRQyWPo4cb2bDaUsEbL3R7IapkqejvGwQJMsamoGU9xVUP0+Cj/UlpVYWQ1wSmFnIZS02LG7bpAIfkeUEhc/3/iu2nJ/PV2dROIHZ1rlxNBwcmWb0QnaYEYHd1IGHdVCMBpx2ggmgChphkbhhaGd3r84ZRt3SmIefwmx025R/CgSX/6Fvsqih</Modulus><Exponent>AQAB</Exponent></RSAKeyValue>'
-$InstallDir  = "C:\ProgramData\IT-Solutions"
+$InstallDir  = "C:\ProgramData\IT-Solutions\Agent"
 $TaskName    = "IT-Solutions Asset-Collector"
 $LogFile     = Join-Path $InstallDir "setup.log"
 
@@ -89,7 +90,74 @@ try {
   Fail "Das CRM ($CrmBase) ist von diesem Rechner nicht erreichbar: $($_.Exception.Message). Internet/Proxy/Firewall (ausgehend HTTPS 443) pruefen."
 }
 
-New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+# --- Eigener Unterordner C:\ProgramData\IT-Solutions\Agent (v19) -----------------
+# Nur der Agent-Ordner ist auf SYSTEM + Administratoren beschraenkt (Token). Den Elternordner nutzt der
+# IT-Solutions-Anmeldestandard (Laufwerke, Desktop-Info, Starter, Logs) - dessen Skripte laufen als normaler
+# Benutzer und brauchen Lesezugriff. Bis v18 lag der Agent direkt im Elternordner und hat dort die Vererbung
+# abgeschaltet; der Umzug unten holt das nach (Token bleibt, kein neues Enrollment).
+# Dieser Block steht gleichlautend in collector.ps1.
+$AgentLegacyDir = Join-Path $env:ProgramData "IT-Solutions"
+$AgentDir       = Join-Path $AgentLegacyDir "Agent"
+$AgentAdminSids = @("S-1-5-18", "S-1-5-32-544")   # SYSTEM, Administratoren (sprachunabhaengig)
+
+function Protect-AgentDir {
+  New-Item -ItemType Directory -Force -Path $AgentDir | Out-Null
+  $acl = (Get-Item $AgentDir).GetAccessControl("Access")
+  $acl.SetAccessRuleProtection($true, $false)
+  foreach ($r in @($acl.GetAccessRules($true, $false, [System.Security.Principal.SecurityIdentifier]))) { [void]$acl.RemoveAccessRuleSpecific($r) }
+  foreach ($sid in $AgentAdminSids) {
+    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+      (New-Object System.Security.Principal.SecurityIdentifier $sid), "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")))
+  }
+  (Get-Item $AgentDir).SetAccessControl($acl)
+}
+
+# Vom alten Agent gesperrt? = Vererbung aus und ausschliesslich SYSTEM/Administratoren eingetragen.
+function Test-AgentLockedAcl($acl) {
+  if (-not $acl.AreAccessRulesProtected) { return $false }
+  $rules = @($acl.GetAccessRules($true, $false, [System.Security.Principal.SecurityIdentifier]))
+  if ($rules.Count -eq 0) { return $false }
+  foreach ($r in $rules) { if ($AgentAdminSids -notcontains $r.IdentityReference.Value) { return $false } }
+  return $true
+}
+
+# Liefert $true, wenn es etwas umzuziehen gab. Wirft bei Fehlern, BEVOR am alten Ort etwas geloescht wird.
+function Move-AgentToSubdir {
+  $legacyScript = Join-Path $AgentLegacyDir "collector.ps1"
+  if (-not (Test-Path (Join-Path $AgentLegacyDir "agent-config.json")) -and -not (Test-Path $legacyScript)) { return $false }
+  Protect-AgentDir
+  # Kopieren statt Verschieben: die Kopie erbt die Rechte des Agent-Ordners. Was im Ziel schon liegt, bleibt.
+  foreach ($f in "agent-config.json", "collector.ps1", "setup.log") {
+    $src = Join-Path $AgentLegacyDir $f; $dst = Join-Path $AgentDir $f
+    if ((Test-Path $src) -and -not (Test-Path $dst)) { Copy-Item -Path $src -Destination $dst }
+  }
+  $newScript = Join-Path $AgentDir "collector.ps1"
+  foreach ($name in "IT-Solutions Asset-Collector", "IT-Solutions Agent Poll") {
+    $task = Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
+    if (-not $task) { continue }
+    $act = $task.Actions[0]
+    if ($act.Arguments -match [regex]::Escape($legacyScript)) {
+      $act.Arguments = $act.Arguments -replace [regex]::Escape($legacyScript), $newScript.Replace('$', '$$')
+      Set-ScheduledTask -TaskName $name -Action $act | Out-Null
+    }
+  }
+  foreach ($f in "agent-config.json", "collector.ps1", "collector.ps1.bak", "collector.ps1.new", "setup.log") {
+    Remove-Item -Force -ErrorAction SilentlyContinue -Path (Join-Path $AgentLegacyDir $f)
+  }
+  $acl = (Get-Item $AgentLegacyDir).GetAccessControl("Access")
+  if (Test-AgentLockedAcl $acl) {
+    $acl.SetAccessRuleProtection($false, $true)
+    (Get-Item $AgentLegacyDir).SetAccessControl($acl)   # nur DACL (Set-Acl will sonst auch die SACL schreiben)
+  }
+  return $true
+}
+
+# Vorhandene Installation (bis v18 direkt in C:\ProgramData\IT-Solutions) umziehen - Token bleibt erhalten.
+try {
+  if (Move-AgentToSubdir) { Write-Host "Vorhandene Installation nach $InstallDir umgezogen." -ForegroundColor Yellow }
+} catch { Fail "Umzug der vorhandenen Installation nach $InstallDir fehlgeschlagen: $($_.Exception.Message)" }
+# Ordner VOR dem Ablegen des Tokens sperren (nur SYSTEM + Administratoren).
+Protect-AgentDir
 Log "Setup gestartet auf $($env:COMPUTERNAME) (PowerShell $($PSVersionTable.PSVersion))"
 
 # --- 1. Enrollment ---
@@ -155,17 +223,6 @@ if (-not $rsa.VerifyData($collBytes, "SHA256", [Convert]::FromBase64String($sigT
   token     = $resp.token
   reportUrl = "$CrmBase$($resp.reportUrl)"
 } | ConvertTo-Json | Set-Content -Path $cfgPath -Encoding UTF8
-
-# ACL: nur SYSTEM + Administratoren duerfen lesen (Token schuetzen)
-$acl = Get-Acl $InstallDir
-$acl.SetAccessRuleProtection($true, $false)
-foreach ($id in @("SYSTEM", "Administratoren", "Administrators")) {
-  try {
-    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
-      $id, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")))
-  } catch {}
-}
-Set-Acl -Path $InstallDir -AclObject $acl
 
 # --- 3. Scheduled Task ---
 Write-Host "[3/4] Scheduled Task einrichten..." -ForegroundColor Cyan

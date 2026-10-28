@@ -1,5 +1,5 @@
 # IT-Solutions Asset-Collector
-# collector-version: 18
+# collector-version: 19
 # Infrastruktur-Scan (nur lesend) -> POST an das CRM. Zusaetzlich fuehrt er die FESTEN Befehle
 # windows-update, winget-upgrade, rescan und reboot aus, wenn das CRM sie fuer dieses Geraet
 # freigegeben hat (Opt-in) und der Nutzer sie ausgeloest hat. Kein freies Skript, kein Fernzugriff.
@@ -21,8 +21,82 @@ $ErrorActionPreference = "Stop"
 # TLS 1.2 erzwingen (Windows PowerShell 5.1 nutzt sonst veraltetes TLS).
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$CollectorVersion = 18
+$CollectorVersion = 19
 $SigningKeyXml = '<RSAKeyValue><Modulus>uAxspiYovBEcA7viyD9y1pDu+gw4n/ASAGAgLZHCURTOYeD6Az/Udz8JavYAf7SQmISWfe28nVhzskliDyYyy23RiS9NpEnS0tqMXBNr+tKz29N4wOhTdyhqsIyAulxN9rK+VA+WyF9lNBmTI94OvUJ3qeebgrJpHThdVILVVhqQVwUjTJvq2ZQDoCZcofdGYVWowBRyCewoW9KMnDsoEGXy/1/nuxKRB4GicQMo4P5+HMWbNQFf+c5n+qGKE3N4TdPUHQOE38i25y5zgJ8e88Olqhla2cKfhU5wwJhZ5JgvR/R6BSt0QAxdXmkOLtfjH8SWIyHLdaUXRQyWPo4cb2bDaUsEbL3R7IapkqejvGwQJMsamoGU9xVUP0+Cj/UlpVYWQ1wSmFnIZS02LG7bpAIfkeUEhc/3/iu2nJ/PV2dROIHZ1rlxNBwcmWb0QnaYEYHd1IGHdVCMBpx2ggmgChphkbhhaGd3r84ZRt3SmIefwmx025R/CgSX/6Fvsqih</Modulus><Exponent>AQAB</Exponent></RSAKeyValue>'
+
+# --- Eigener Unterordner C:\ProgramData\IT-Solutions\Agent (v19) -----------------
+# Nur der Agent-Ordner ist auf SYSTEM + Administratoren beschraenkt (Token). Den Elternordner nutzt der
+# IT-Solutions-Anmeldestandard (Laufwerke, Desktop-Info, Starter, Logs) - dessen Skripte laufen als normaler
+# Benutzer und brauchen Lesezugriff. Bis v18 lag der Agent direkt im Elternordner und hat dort die Vererbung
+# abgeschaltet; der Umzug unten holt das nach (Token bleibt, kein neues Enrollment).
+# Dieser Block steht gleichlautend in it-solutions-agent-setup.ps1.
+$AgentLegacyDir = Join-Path $env:ProgramData "IT-Solutions"
+$AgentDir       = Join-Path $AgentLegacyDir "Agent"
+$AgentAdminSids = @("S-1-5-18", "S-1-5-32-544")   # SYSTEM, Administratoren (sprachunabhaengig)
+
+function Protect-AgentDir {
+  New-Item -ItemType Directory -Force -Path $AgentDir | Out-Null
+  $acl = (Get-Item $AgentDir).GetAccessControl("Access")
+  $acl.SetAccessRuleProtection($true, $false)
+  foreach ($r in @($acl.GetAccessRules($true, $false, [System.Security.Principal.SecurityIdentifier]))) { [void]$acl.RemoveAccessRuleSpecific($r) }
+  foreach ($sid in $AgentAdminSids) {
+    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+      (New-Object System.Security.Principal.SecurityIdentifier $sid), "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")))
+  }
+  (Get-Item $AgentDir).SetAccessControl($acl)
+}
+
+# Vom alten Agent gesperrt? = Vererbung aus und ausschliesslich SYSTEM/Administratoren eingetragen.
+function Test-AgentLockedAcl($acl) {
+  if (-not $acl.AreAccessRulesProtected) { return $false }
+  $rules = @($acl.GetAccessRules($true, $false, [System.Security.Principal.SecurityIdentifier]))
+  if ($rules.Count -eq 0) { return $false }
+  foreach ($r in $rules) { if ($AgentAdminSids -notcontains $r.IdentityReference.Value) { return $false } }
+  return $true
+}
+
+# Liefert $true, wenn es etwas umzuziehen gab. Wirft bei Fehlern, BEVOR am alten Ort etwas geloescht wird.
+function Move-AgentToSubdir {
+  $legacyScript = Join-Path $AgentLegacyDir "collector.ps1"
+  if (-not (Test-Path (Join-Path $AgentLegacyDir "agent-config.json")) -and -not (Test-Path $legacyScript)) { return $false }
+  Protect-AgentDir
+  # Kopieren statt Verschieben: die Kopie erbt die Rechte des Agent-Ordners. Was im Ziel schon liegt, bleibt.
+  foreach ($f in "agent-config.json", "collector.ps1", "setup.log") {
+    $src = Join-Path $AgentLegacyDir $f; $dst = Join-Path $AgentDir $f
+    if ((Test-Path $src) -and -not (Test-Path $dst)) { Copy-Item -Path $src -Destination $dst }
+  }
+  $newScript = Join-Path $AgentDir "collector.ps1"
+  foreach ($name in "IT-Solutions Asset-Collector", "IT-Solutions Agent Poll") {
+    $task = Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
+    if (-not $task) { continue }
+    $act = $task.Actions[0]
+    if ($act.Arguments -match [regex]::Escape($legacyScript)) {
+      $act.Arguments = $act.Arguments -replace [regex]::Escape($legacyScript), $newScript.Replace('$', '$$')
+      Set-ScheduledTask -TaskName $name -Action $act | Out-Null
+    }
+  }
+  foreach ($f in "agent-config.json", "collector.ps1", "collector.ps1.bak", "collector.ps1.new", "setup.log") {
+    Remove-Item -Force -ErrorAction SilentlyContinue -Path (Join-Path $AgentLegacyDir $f)
+  }
+  $acl = (Get-Item $AgentLegacyDir).GetAccessControl("Access")
+  if (Test-AgentLockedAcl $acl) {
+    $acl.SetAccessRuleProtection($false, $true)
+    (Get-Item $AgentLegacyDir).SetAccessControl($acl)   # nur DACL (Set-Acl will sonst auch die SACL schreiben)
+  }
+  return $true
+}
+
+if (-not $DryRun) {
+  $moved = $false
+  try { $moved = Move-AgentToSubdir } catch { Write-Warning "Umzug nach $AgentDir fehlgeschlagen: $($_.Exception.Message)" }
+  if ($moved -and $PSScriptRoot -eq $AgentLegacyDir) {
+    # Diese Instanz laeuft noch vom alten Ort: mit der Kopie im Agent-Ordner weitermachen.
+    $runArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $AgentDir "collector.ps1"))
+    if ($Poll) { $runArgs += "-Poll" }
+    & powershell.exe @runArgs | Out-Null
+    exit 0
+  }
+}
 
 $cfgPath = Join-Path $PSScriptRoot "agent-config.json"
 if (-not (Test-Path $cfgPath)) { Write-Error "agent-config.json fehlt"; exit 1 }
