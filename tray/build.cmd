@@ -4,5 +4,5 @@ setlocal
 set CSC=%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe
 if not exist "%CSC%" set CSC=%WINDIR%\Microsoft.NET\Framework\v4.0.30319\csc.exe
 cd /d "%~dp0"
-"%CSC%" /nologo /target:winexe /optimize+ /platform:anycpu /out:IT-Solutions-Agent.exe /r:System.Web.Extensions.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll TrayAgent.cs
+"%CSC%" /nologo /codepage:65001 /target:winexe /optimize+ /platform:anycpu /out:IT-Solutions-Agent.exe /r:System.Web.Extensions.dll /r:System.Windows.Forms.dll /r:System.Drawing.dll /resource:logo-white.png,logo-white.png TrayAgent.cs
 exit /b %ERRORLEVEL%
